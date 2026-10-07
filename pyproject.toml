@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "nafhtr_cyrillic_latin"
-version = "0.1.0"
-description = "An HTR pipeline for historical text recognition, which classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
+name = "nafrec"
+version = "0.2.0"
+description = "An HTR and OCR pipeline for historical text recognition, which classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,11 +20,13 @@ dependencies = [
     "rfdetr==1.9.1",
     "shapely>=2.0.6",
     "torch>=2.4.0",
-    "transformers>=5.1.0",
+    "transformers==5.10.4",
+    "optimum==2.3.0",
     "yattag>=1.16.1",
     "supervision==0.29.1",
     "huggingface-hub>=1.19.0"
 ]
+
 authors = [
   {name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi"},
   {name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi"},
@@ -42,11 +44,21 @@ classifiers = [
   "Programming Language :: Python"
 ]
 
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.18"]
+gpu = ["onnxruntime-gpu>=1.18"]
+
 [project.urls]
-Homepage = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin_pipeline"
-Documentation = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin_pipeline"
-Repository = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin_pipeline"
-"Bug Tracker" = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin_pipeline/issues"
+Homepage = "https://github.com/Kansallisarkisto-AI/nafrec"
+Documentation = "https://github.com/Kansallisarkisto-AI/nafrec"
+Repository = "https://github.com/Kansallisarkisto-AI/nafrec"
+"Bug Tracker" = "https://github.com/Kansallisarkisto-AI/nafrec/issues"
 
 [project.scripts]
 nafrec = "nafrec:main.entrypoint"
+
+# Don't try to satisfy both extras at once (they provide the same module).
+[tool.uv]
+conflicts = [
+    [{ extra = "cpu" }, { extra = "gpu" }],
+]

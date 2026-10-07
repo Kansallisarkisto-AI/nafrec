@@ -1,4 +1,4 @@
-# rfdetr_trocr_cyrillic_latin_pipeline
+# nafrec
 An HTR pipeline for historical text recognition, which classifies text lines into cyrillic or latin based on their script types and then passes them to a proper (TrOCR) text recognition model.
 
 ## Installation
@@ -10,30 +10,22 @@ This project uses `pyproject.toml` for dependency management. You can install th
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create a virtual environment and install dependencies
+# Create a virtual environment and activate it
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e .
+
+# Install package (choose cpu or gpu)
+uv pip install nafrec[cpu]
 ```
 
 ### Using pip with venv
 ```bash
-# Create a virtual environment
+# Create a virtual environment and activate it
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
-pip install -e .
-```
-
-### Using conda
-```bash
-# Create a conda environment
-conda create -n rfdetr_trocr_cyrillic_latin_pipeline python=3.11
-conda activate rfdetr_trocr_cyrillic_latin_pipeline
-
-# Install dependencies
-pip install -e .
+# Install package (choose cpu or gpu)
+pip install nafrec[cpu]
 ```
 
 ## Models
@@ -68,7 +60,7 @@ The pipeline processes images through the following steps:
 2. **Detection**: RF-DETR model detects text regions and text lines 
 3. **Cropping**: Text lines are cropped from the original image based on detected coordinates
 4. **Text type classification**: Classification model labels every text line as "cyrillic" or "latin" based on the predicted script type
-5. **Recognition**: Based on the classification results, text line images ase passed to the proper TrOCR model which recognizes text from each cropped line
+5. **Recognition**: Based on the classification results, text line images ase passed to the proper TrOCR or PP-OCRv6 model which recognizes text from each cropped line
 6. **Output**: ALTO XML and/or PAGE XML file containing region coordinates, text line coordinates, and recognized text
 
 ## Usage
@@ -119,7 +111,7 @@ nafhtr_cyrillic_latin \
 
 ### Example
 ```bash
-nafhtr_cyrillic_latin \
+nafrec \
     --detection_model_path /path/to/rfdetr/model.pth \
     --script_classification_model_path /path/to/script/classification/model.pt \
     --recognition_model_path /path/to/trocr/model/folder/ \
@@ -128,7 +120,7 @@ nafhtr_cyrillic_latin \
     --cyrillic_processor_path /path/to/cyrillic/trocr/processor/folder/ \
     --input_folder /path/to/images/ \
     --confidence_threshold 0.2 \
-    --opage_xml True \
+    --page_xml True \
     --xml_folder /output/path
 ```
 
