@@ -6,8 +6,6 @@ from transformers.models.vit.modeling_vit import ViTPatchEmbeddings, ViTEmbeddin
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-IMG_HEIGHT = 192
-IMG_WIDTH = 1024
 
 class TrOCRProcessorCustom(TrOCRProcessor):
     def __init__(self, image_processor, tokenizer):
@@ -69,8 +67,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main")
     else:
         processor = TrOCRProcessor.from_pretrained(processor_path,
                                                 backend="torchvision",
-                                                do_resize=True, 
-                                                size={'height': IMG_HEIGHT,'width': IMG_WIDTH},
+                                                do_resize=True,
                                                 revision=revision)
     
     return model, processor
