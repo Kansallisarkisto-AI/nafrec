@@ -29,7 +29,7 @@ class ClassifierInput(BaseModel):
     batch_size: int
     default_label: str
 
-class TrOCRInput(BaseModel):
+class OCRInput(BaseModel):
     line_images: list
     line_polygons: list
     line_confs: list
@@ -303,7 +303,7 @@ def get_text_predictions(
         subset_polygons = [line_polygons[i] for i in indices]
         subset_confs = [img_line_confs[i] for i in indices]
  
-        payload = TrOCRInput(
+        payload = OCRInput(
             line_images=subset_lines,
             line_polygons=subset_polygons,
             line_confs=subset_confs,
