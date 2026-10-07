@@ -1,6 +1,4 @@
 import os 
-import time
-
 import torch
 import numpy as np
 import torch.nn as nn
@@ -8,13 +6,11 @@ from PIL import Image
 from collections import Counter
 import torchvision.models as models
 import torchvision.transforms.v2.functional as TF
-from pydantic import BaseModel
 
-from .image_processing import load_with_torchvision
-
-# Stabe parameters used by the cassification model
+# Stable parameters used by the classification model
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+MODEL_TYPE = "convnext_tiny"
 IMAGE_WIDTH = 768
 IMAGE_HEIGHT = 96
 NUM_CLASSES = 2
@@ -22,24 +18,23 @@ IDX2LABEL = {0: "cyrillic", 1: "latin"}
 
 class ModelBackend:
     def __init__(self, checkpoint_path: str, device: str):
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
         if device == "cuda" and not torch.cuda.is_available():
             print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
             device = "cpu"
         self.device = torch.device(device)
-
-        model = self.build_mobilenet_v3_small()
-        model.load_state_dict(ckpt["model_state_dict"])
+        model = self.build_model(checkpoint_path)
         self.model = model.to(self.device).eval()
     
-    def build_mobilenet_v3_small(self):
+    def build_model(self, checkpoint_path: str):
         """
-        Builds a MobileNetV3-Small model using trained model weights.
+        Builds a model using trained model weights.
         """
         # Load model weights
-        model = models.mobilenet_v3_small(weights=None)
-        in_features = model.classifier[3].in_features
-        model.classifier[3] = nn.Linear(in_features, NUM_CLASSES)
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        model = models.convnext_tiny(weights=None)
+        in_features = model.classifier[2].in_features
+        model.classifier[2] = nn.Linear(in_features, NUM_CLASSES)
+        model.load_state_dict(ckpt["model_state_dict"])
         return model
     
     def predict_batch(self, batch_tensor: torch.Tensor):

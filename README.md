@@ -68,8 +68,8 @@ The pipeline processes images through the following steps:
 2. **Detection**: RF-DETR model detects text regions and text lines 
 3. **Cropping**: Text lines are cropped from the original image based on detected coordinates
 4. **Text type classification**: Classification model labels every text line as "cyrillic" or "latin" based on the predicted script type
-4. **Recognition**: Based on the classification results, text line images ase passed to the proper TrOCR model which recognizes text from each cropped line
-5. **Output**: ALTO XML and/or PAGE XML file containing region coordinates, text line coordinates, and recognized text
+5. **Recognition**: Based on the classification results, text line images ase passed to the proper TrOCR model which recognizes text from each cropped line
+6. **Output**: ALTO XML and/or PAGE XML file containing region coordinates, text line coordinates, and recognized text
 
 ## Usage
 

@@ -46,37 +46,37 @@ def parse_args():
     parser.add_argument(
         "--detection_model_path",
         type=str,
-        default='/4tb_01/models/super_seg/roboflow-gen2/rfdetr-textline-textregion-detection-2xl/checkpoint_best_total.pth',
+        default='/path/to/detection_model.pth',
         help="Path to the detection model file"
     )
     parser.add_argument(
         "--recognition_model_path",
         type=str,
-        default='/4tb_01/models/htr/supermalli/202509/202509_tf32/',
+        default='/path/to/recognition_model/',
         help="Path to the recognition model folder"
     )
     parser.add_argument(
         "--cyrillic_recognition_model_path",
         type=str,
-        default='/4tb_01/models/htr/cyrillic/cyrillic-large-handwritten/',
+        default='/path/to/cyrillic_recognition_model/',
         help="Path to the cyrillic recognition model folder"
     )
     parser.add_argument(
         "--processor_path",
         type=str,
-        default='/4tb_01/models/htr/supermalli/202509/202509_tf32/processor/',
+        default='/path/to/processor/',
         help="Path to the processor folder"
     )
     parser.add_argument(
         "--cyrillic_processor_path",
         type=str,
-        default='/4tb_01/models/htr/cyrillic/cyrillic-large-handwritten/',
+        default='/path/to/cyrillic_processor/',
         help="Path to the cyrillic processor folder"
     )
     parser.add_argument(
         "--script_classification_model_path",
         type=str,
-        default="/shared/koodit/HTR/script-classifier/models/mobilenet_v3_small/96x768_no_aug_balanced_data_30092026/mobilenet_96x768_no_aug.pt", #'/shared/koodit/HTR/script-classifier/models/mobilenet_v3_small/96x768_new_aug/mobilenet_96x768_new_aug.pt',
+        default="/path/to/classification_model.pt", 
         help="Path to the script classification model file"
     )
     parser.add_argument(
@@ -417,7 +417,7 @@ def process_all_images(
     3. Classifying line images based on their script type (latin / cyrillic)
     4. Passing text lines into cyrillic or non-cyrillic recognition model based on their text type
     5. Recognizing text content using a the selected recognition model
-    4. Generating XML output (PAGE or ALTO format) with the recognized text
+    6. Generating XML output (PAGE or ALTO format) with the recognized text
 
     Args:
         images: Iterable of image file paths to process
