@@ -65,9 +65,9 @@ The pipeline processes images through the following steps:
 
 ## Usage
 
-Run the pipeline using the command `nafhtr_cyrillic_latin`:
+Run the pipeline using the command `nafrec`:
 ```bash
-nafhtr_cyrillic_latin \
+nafrec \
     --detection_model_path /path/to/rfdetr/model.pth \
     --script_classification_model_path /path/to/script/classification/model.pt \
     --recognition_model_path /path/to/trocr/model/folder/ \
