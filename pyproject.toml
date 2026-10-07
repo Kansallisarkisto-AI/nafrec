@@ -49,4 +49,4 @@ Repository = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin
 "Bug Tracker" = "https://github.com/Kansallisarkisto-AI/rfdetr_trocr_cyrillic_latin_pipeline/issues"
 
 [project.scripts]
-nafhtr_cyrillic_latin = "nafhtr_cyrillic_latin:main.entrypoint"
+nafrec = "nafrec:main.entrypoint"
