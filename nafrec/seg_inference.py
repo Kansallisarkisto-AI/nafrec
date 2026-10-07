@@ -10,7 +10,6 @@ from collections import defaultdict
 import torch
 from PIL import Image
 from supervision.detection.utils.iou_and_nms import OverlapFilter, OverlapMetric
-#from .inference_slicer_modified import InferenceSlicer
 from supervision import InferenceSlicer
 
 def poly_features(poly_coords, step=1.0, fast_mode=True):
