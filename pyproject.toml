@@ -24,7 +24,8 @@ dependencies = [
     "optimum==2.3.0",
     "yattag>=1.16.1",
     "supervision==0.29.1",
-    "huggingface-hub>=1.19.0"
+    "huggingface-hub>=1.19.0",
+    "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
 ]
 
 authors = [
@@ -62,3 +63,6 @@ nafrec = "nafrec:main.entrypoint"
 conflicts = [
     [{ extra = "cpu" }, { extra = "gpu" }],
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
