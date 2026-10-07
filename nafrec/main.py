@@ -1,11 +1,20 @@
 import os
 import time
-import torch
+
 import argparse
 from tqdm import tqdm
 from pathlib import Path
 from pydantic import BaseModel
 import torch.multiprocessing as mp
+
+# Import PyTorch and prevent useless warning
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*torch.jit.script.*is deprecated.*",
+    category=FutureWarning,
+)
+import torch
 
 from .xml_koodit import get_xml
 from .trocr import get_text_preds, load_trocr_model
@@ -209,7 +218,7 @@ def parse_args():
         "--tile_size",
         type=int,
         default=0,
-        help="Tile size for Slicing Aided Hyper Inference (SAHI), in pixels. 384 is usually a good value for RF-DETR segmentation models. 0 to disable."
+        help="Tile size for Slicing Aided Hyper Inference (SAHI), in pixels. 768 is usually a good value for RF-DETR segmentation models. 0 to disable."
     )
     parser.add_argument(
         "--tile_overlap",
