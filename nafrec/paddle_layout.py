@@ -22,6 +22,9 @@ from .ppocr import _get_providers
 
 DEFAULT_LAYOUT_SIZE = 800  # PP-DocLayout-L / plus-L input size
 
+# With some help for PP-DocLayout_plus-L implementation from
+# https://huggingface.co/cimo001/paddle/tree/main/PP-DocLayout_plus-L/src
+
 # Class id -> name for PP-DocLayout_plus-L (used unless layout_labels_path is given;
 # other PP-DocLayout variants have different class lists, so pass a labels file for them)
 PP_DOCLAYOUT_PLUS_L_LABELS = [
