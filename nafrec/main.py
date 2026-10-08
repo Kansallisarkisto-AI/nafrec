@@ -337,7 +337,7 @@ def build_parser():
     parser.add_argument("--paddle_layout_boxes_in_input_space", action="store_true",
                         help="Set if the layout model returns boxes in resized-input pixels instead of original-image pixels")
     parser.add_argument("--paddle_layout_labels_path", type=str, default=None,
-                        help="Text file with one layout class name per line (class id = line number), e.g. from the model's label_list")
+                        help="Text file with one layout class name per line (class id = line number). Default: the built-in PP-DocLayout_plus-L class names")
     parser.add_argument("--paddle_layout_ignore_classes", type=str, nargs="*", default=[],
                         help="Layout classes (ids, or names if --paddle_layout_labels_path is given) to drop as regions; text lines inside them are dropped too (e.g. image chart seal)")
     parser.add_argument("--paddle_det_limit_side_len", type=int, default=1536,

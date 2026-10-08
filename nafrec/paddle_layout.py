@@ -22,6 +22,15 @@ from .ppocr import _get_providers
 
 DEFAULT_LAYOUT_SIZE = 800  # PP-DocLayout-L / plus-L input size
 
+# Class id -> name for PP-DocLayout_plus-L (used unless layout_labels_path is given;
+# other PP-DocLayout variants have different class lists, so pass a labels file for them)
+PP_DOCLAYOUT_PLUS_L_LABELS = [
+    "paragraph_title", "image", "text", "number", "abstract", "content",
+    "figure_title", "formula", "table", "reference", "doc_title", "footnote",
+    "header", "algorithm", "footer", "seal", "chart", "formula_number",
+    "aside_text", "reference_content",
+]
+
 
 def _static_hw(shape):
     """(H, W) from an ONNX input shape like [1, 3, 800, 800], or None if dynamic."""
@@ -82,7 +91,7 @@ class PaddleLayoutDetector:
         self.boxes_in_input_space = layout_boxes_in_input_space
 
         # ---- class names / ignored classes ----
-        labels = []
+        labels = list(PP_DOCLAYOUT_PLUS_L_LABELS)
         if layout_labels_path:
             with open(layout_labels_path, encoding="utf-8") as f:
                 labels = [line.strip() for line in f if line.strip()]
@@ -96,7 +105,7 @@ class PaddleLayoutDetector:
             else:
                 raise ValueError(
                     f"layout_ignore_classes: '{spec}' is not an integer id and not in the "
-                    f"labels file ({layout_labels_path or 'none given'})")
+                    f"label list ({layout_labels_path or 'built-in PP-DocLayout_plus-L'}): {labels}")
 
         # ---- DB text line detection model ----
         self.det = ort.InferenceSession(det_model_path, providers=providers)
