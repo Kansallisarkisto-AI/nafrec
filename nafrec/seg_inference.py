@@ -371,7 +371,11 @@ def load_rfdetr_model(model_path, device="cuda", batch_size=1):
         RFDETRSeg2XLarge: Optimized model ready for inference.
     """
     model = RFDETRSeg2XLarge(pretrain_weights=model_path, device=device)
-    model.optimize_for_inference(batch_size=batch_size)
+
+    if device == "cpu":
+        model.inference(batch_size=batch_size)
+    else:
+        model.inference(compile_backend="cudagraph", batch_size=batch_size, dtype="float16")
     return model
 
 def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):

@@ -17,7 +17,7 @@ dependencies = [
     "opencv-python-headless>=4.8.1.78",
     "pillow>=9.5.0",
     "pydantic>=2.6.1",
-    "rfdetr==1.9.1",
+    "rfdetr>=1.11.2",
     "shapely>=2.0.6",
     "psutil>=5.9",
     "tqdm",
