@@ -18,6 +18,7 @@ import torch
 
 from .xml_koodit import get_xml
 from .trocr import get_text_preds, load_trocr_model
+from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_polygons
 from .image_processing import load_with_torchvision, crop_lines
 from .script_classifier import load_classification_model, classify_lines
@@ -250,6 +251,43 @@ def parse_args():
         default=False,
         help="Whether to use all GPUs on system instead of just the first one. Requires a patched version of the RF-DETR library that accepts a device argument with the rank specified."
     )
+
+    # PP-OCRv6 args
+    parser.add_argument(
+        "--use_ppocr",
+        action="store_true",
+        help="Use a PP-OCRv6 ONNX recognition model instead of TrOCR for latin-script lines"
+    )
+    parser.add_argument(
+        "--ppocr_model_path",
+        type=str,
+        default="/path/to/ppocr_rec/inference.onnx",
+        help="Path to the PP-OCRv6 recognition ONNX model"
+    )
+    parser.add_argument(
+        "--ppocr_char_dict_path",
+        type=str,
+        default=None,
+        help="Path to the character dictionary used to train the PP-OCRv6 model, or None to use the default dictionary."
+    )
+    parser.add_argument(
+        "--ppocr_img_height",
+        type=int,
+        default=96,
+        help="PP-OCR input height, must match training (e.g. 96 for a custom NAF model)"
+    )
+    parser.add_argument(
+        "--ppocr_img_width_min",
+        type=int,
+        default=1536,
+        help="PP-OCR minimum input width (scalable)"
+    )
+    parser.add_argument(
+        "--ppocr_batch_size",
+        type=int,
+        default=32,
+        help="Batch size for PP-OCR text recognition"
+    )
         
     args = parser.parse_args()
     return args
@@ -311,15 +349,21 @@ def get_text_predictions(
         subset_lines = [cropped_lines[i] for i in indices]
         subset_polygons = [line_polygons[i] for i in indices]
         subset_confs = [img_line_confs[i] for i in indices]
- 
+
+        # PP-OCRv6 or not
+        use_ppocr = isinstance(model, PPOCRRecognizer)
+
         payload = OCRInput(
             line_images=subset_lines,
             line_polygons=subset_polygons,
             line_confs=subset_confs,
-            batch_size=args.trocr_batch_size,
+            batch_size=args.ppocr_batch_size if use_ppocr else args.trocr_batch_size,
         )
 
-        subset_predictions = get_text_preds(payload, model, processor)
+        if use_ppocr:
+            subset_predictions = get_ppocr_preds(payload, model)
+        else:
+            subset_predictions = get_text_preds(payload, model, processor)
 
         used_models.append(model_names[label])
 
@@ -536,6 +580,19 @@ def process_all_images(
             print(f"[error] failed to process {image_path}: {e}")
             continue
 
+def load_latin_recognizer(args, device):
+    """Returns (recognition_model, processor). processor is None for PP-OCR."""
+    if args.use_ppocr:
+        model = load_ppocr_model(
+            args.ppocr_model_path,
+            args.ppocr_char_dict_path,
+            device=device,
+            img_height=args.ppocr_img_height,
+            img_width_min=args.ppocr_img_width_min,
+        )
+        return model, None
+    return load_trocr_model(args.recognition_model_path, args.processor_path, device)
+
 def main(args):
     if args.device == "cuda" and not torch.cuda.is_available():
         print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
@@ -545,8 +602,10 @@ def main(args):
     detection_model = load_rfdetr_model(args.detection_model_path, device=args.device, batch_size=args.tile_batch_size if args.tile_size else 1)
     print("Loading script type classification model")
     classification_model = load_classification_model(args.script_classification_model_path, args.device)
-    print('Loading TrOCR model for latin script')
-    recognition_model, processor = load_trocr_model(args.recognition_model_path, args.processor_path, args.device)
+
+    print('Loading PP-OCRv6 model for latin script' if args.use_ppocr else 'Loading TrOCR model for latin script')
+    recognition_model, processor = load_latin_recognizer(args, args.device)
+    
     print('Loading TrOCR model for cyrillic script')
     cyrillic_recognition_model, cyrillic_processor = load_trocr_model(args.cyrillic_recognition_model_path, args.cyrillic_processor_path, args.device)
 
@@ -566,7 +625,7 @@ def worker(rank, world_size, args):
     print(f"[GPU {rank}] loading models...")
     detection_model = load_rfdetr_model(args.detection_model_path, device=device_string, batch_size=args.tile_batch_size if args.tile_size else 1)
     classification_model = load_classification_model(args.script_classification_model_path, device=device_string)
-    recognition_model, processor = load_trocr_model(args.recognition_model_path, args.processor_path, device=device_string)
+    recognition_model, processor = load_latin_recognizer(args, device_string)
     cyrillic_recognition_model, cyrillic_processor = load_trocr_model(args.cyrillic_recognition_model_path, args.cyrillic_processor_path, device=device_string)
 
     images = load_image_paths(args.input_folder)
