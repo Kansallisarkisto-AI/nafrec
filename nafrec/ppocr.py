@@ -6,29 +6,55 @@ rest of the pipeline (XML / JSON output) doesn't need to know which model was us
 """
 import numpy as np
 import cv2
+import os
 
 
-def _get_providers(device):
+def _get_providers_and_options(device):
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
     Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
     import onnxruntime as ort
 
     device = str(device)
+    # get available providers
+    available = ort.get_available_providers()
+    option = ort.SessionOptions()
+
+    # If CPU-only
     if not device.startswith("cuda"):
-        return ["CPUExecutionProvider"]
+        # Special settings for CPU providers
+
+        option.log_severity_level = 3
+
+        option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        option.intra_op_num_threads = max(1, os.cpu_count())
+        option.inter_op_num_threads = 1
+
+        option.enable_cpu_mem_arena = True
+        option.enable_mem_pattern = True
+        option.enable_mem_reuse = True
+
+        for name in ("OpenVINOExecutionProvider",):  # special CPU providers in priority order
+            if name in available:
+                print(f"[info] using accelerated {name}")
+                return [name, "CPUExecutionProvider"], option
+
+        print(f"[info] using generic CPUExecutionProvider")
+        return ["CPUExecutionProvider"], option  # generic CPU fallback
 
     device_id = int(device.split(":")[1]) if ":" in device else 0
-    available = ort.get_available_providers()
 
     for name in ("CUDAExecutionProvider",        # NVIDIA
                  "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
                  "ROCMExecutionProvider"):       # AMD, ORT <= 1.22 (legacy)
         if name in available:
-            return [(name, {"device_id": device_id}), "CPUExecutionProvider"]
+            return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
     print("[warn] no GPU execution provider found in onnxruntime "
           f"(available: {available}) -- PP-OCR will run on CPU")
-    return ["CPUExecutionProvider"]
+
+    # fall back to generic CPU provider
+    return ["CPUExecutionProvider"], option
 
 
 class PPOCRRecognizer:
@@ -40,7 +66,8 @@ class PPOCRRecognizer:
         import onnxruntime as ort
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
-        self.session = ort.InferenceSession(model_path, providers=_get_providers(device))
+        providers, options = _get_providers_and_options(device)
+        self.session = ort.InferenceSession(model_path, providers=providers, sess_options=options)
         self.input_name = self.session.get_inputs()[0].name
 
         self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min))

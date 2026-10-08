@@ -18,7 +18,7 @@ tuples, and image_shape = (height, width), all in original-image pixel coordinat
 import numpy as np
 import cv2
 
-from .ppocr import _get_providers
+from .ppocr import _get_providers_and_options
 
 DEFAULT_LAYOUT_SIZE = 800  # PP-DocLayout-L / plus-L input size
 
@@ -68,13 +68,13 @@ class PaddleLayoutDetector:
         import onnxruntime as ort
         from ppocrv6_onnx import DetPreProcess, DBPostProcess
 
-        providers = _get_providers(device)
+        providers, options = _get_providers_and_options(device)
 
         # ---- layout model (optional: without it there are no regions and nafrec
         # falls back to one full-page region) ----
         self.layout = None
         if layout_model_path:
-            self.layout = ort.InferenceSession(layout_model_path, providers=providers)
+            self.layout = ort.InferenceSession(layout_model_path, providers=providers, sess_options=options)
             inputs = {i.name: i for i in self.layout.get_inputs()}
             self._img_name = "image" if "image" in inputs else next(
                 i.name for i in self.layout.get_inputs() if len(i.shape) == 4)
