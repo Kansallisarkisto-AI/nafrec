@@ -35,10 +35,10 @@ def load_image_paths(input_folder, extensions=None):
 
 def get_default_region(image_shape):
     """Function for creating a default region if no regions are detected."""
-    w, h = image_shape
+    h, w = image_shape  # image_shape is (height, width)
     region = {'region_coords': [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
             'coords': [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
-            'max_min': [w, 0.0, h, 0.0], 
+            'max_min': [0.0, 0.0, w, h], 
             #'class': '1',  tämä lienee turha. ei käytetä get_line_regions tai order_regions_lines funktioissa
             'region_name': "paragraph", 
             'region_conf': 0.0,

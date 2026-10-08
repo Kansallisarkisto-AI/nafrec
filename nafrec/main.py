@@ -25,6 +25,7 @@ from .xml_koodit import get_xml
 from .trocr import get_text_preds, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_polygons
+from .paddle_layout import load_paddle_layout_model
 from .image_processing import load_with_torchvision, crop_lines
 from .script_classifier import load_classification_model, classify_lines
 from .utils import load_image_paths, get_default_region, get_line_regions, order_regions_lines, flatten_lines, process_text_predictions, get_page_stats, save_json_output
@@ -312,7 +313,46 @@ def build_parser():
         default=32,
         help="Batch size for PP-OCR text recognition"
     )
-        
+
+    # Detector selection / Paddle layout + text detection args
+    parser.add_argument(
+        "--detector",
+        type=str,
+        choices=["rfdetr", "paddle"],
+        default="rfdetr",
+        help="Segmentation backend: 'rfdetr' (--detection_model_path) or 'paddle' (ONNX DB text detection model for lines, plus an optional PP-DocLayout layout model for regions)"
+    )
+    parser.add_argument("--paddle_layout_model_path", type=str, default=None,
+                        help="Optional Paddle layout model (ONNX, e.g. PP-DocLayout) giving the text regions. Without it each page is one full-page region.")
+    parser.add_argument("--paddle_det_model_path", type=str, default=None,
+                        help="Paddle DB text detection model (ONNX, e.g. PP-OCRv6 det) giving the text lines")
+    parser.add_argument("--paddle_layout_threshold", type=float, default=0.3,
+                        help="Minimum score for layout regions")
+    parser.add_argument("--paddle_layout_input_size", type=int, default=0,
+                        help="Layout model input size for models with dynamic input shape (0 = 800). Ignored for fixed-size models.")
+    parser.add_argument("--paddle_layout_mean", type=float, nargs=3, default=(0.0, 0.0, 0.0),
+                        help="Layout model input normalization mean (RGB, after scaling to 0-1). PP-DocLayout-L/plus-L: 0 0 0")
+    parser.add_argument("--paddle_layout_std", type=float, nargs=3, default=(1.0, 1.0, 1.0),
+                        help="Layout model input normalization std (RGB). PP-DocLayout-L/plus-L: 1 1 1; PicoDet-based S/M models typically use ImageNet 0.229 0.224 0.225")
+    parser.add_argument("--paddle_layout_boxes_in_input_space", action="store_true",
+                        help="Set if the layout model returns boxes in resized-input pixels instead of original-image pixels")
+    parser.add_argument("--paddle_layout_labels_path", type=str, default=None,
+                        help="Text file with one layout class name per line (class id = line number), e.g. from the model's label_list")
+    parser.add_argument("--paddle_layout_ignore_classes", type=str, nargs="*", default=[],
+                        help="Layout classes (ids, or names if --paddle_layout_labels_path is given) to drop as regions; text lines inside them are dropped too (e.g. image chart seal)")
+    parser.add_argument("--paddle_det_limit_side_len", type=int, default=1536,
+                        help="Text detection input resize limit in pixels (see --paddle_det_limit_type)")
+    parser.add_argument("--paddle_det_limit_type", type=str, choices=["max", "min"], default="max",
+                        help="'max': downscale so the longer side is at most the limit; 'min': upscale so the shorter side is at least the limit")
+    parser.add_argument("--paddle_det_max_side_limit", type=int, default=4000,
+                        help="Hard cap for the longer side of the text detection input")
+    parser.add_argument("--paddle_det_thresh", type=float, default=0.3,
+                        help="DB binarization threshold")
+    parser.add_argument("--paddle_det_box_thresh", type=float, default=0.6,
+                        help="DB minimum box score (also used as the line confidence)")
+    parser.add_argument("--paddle_det_unclip_ratio", type=float, default=1.5,
+                        help="DB box expansion ratio")
+
     return parser
 
 def parse_args(argv=None):
@@ -460,6 +500,11 @@ def classification_enabled(args):
     return latin_enabled(args) and cyrillic_enabled(args)
 
 def validate_args(args):
+    if args.detector == "paddle":
+        if not args.paddle_det_model_path:
+            raise ValueError("detector='paddle' requires paddle_det_model_path (text line detection ONNX model)")
+        if not args.paddle_layout_model_path:
+            print("[info] no paddle layout model: each page is treated as a single full-page region")
     latin, cyr = latin_enabled(args), cyrillic_enabled(args)
     if not (latin or cyr):
         raise ValueError("No recognition model configured: set recognition_model_path "
@@ -604,6 +649,54 @@ def segmentation_max_size(args):
 # GPU side
 # ---------------------------------------------------------------------------
 
+def load_detection_model(args, device):
+    """Load the configured segmentation backend onto `device`."""
+    if args.detector == "paddle":
+        return load_paddle_layout_model(
+            args.paddle_layout_model_path,
+            args.paddle_det_model_path,
+            device,
+            layout_threshold=args.paddle_layout_threshold,
+            layout_input_size=args.paddle_layout_input_size,
+            layout_mean=tuple(args.paddle_layout_mean),
+            layout_std=tuple(args.paddle_layout_std),
+            layout_boxes_in_input_space=args.paddle_layout_boxes_in_input_space,
+            layout_labels_path=args.paddle_layout_labels_path,
+            layout_ignore_classes=args.paddle_layout_ignore_classes,
+            det_limit_side_len=args.paddle_det_limit_side_len,
+            det_limit_type=args.paddle_det_limit_type,
+            det_max_side_limit=args.paddle_det_max_side_limit,
+            det_thresh=args.paddle_det_thresh,
+            det_box_thresh=args.paddle_det_box_thresh,
+            det_unclip_ratio=args.paddle_det_unclip_ratio,
+        )
+    return load_rfdetr_model(
+        args.detection_model_path,
+        device=device,
+        batch_size=args.tile_batch_size if args.tile_size else 1,
+    )
+
+def run_detection(detection_model, image_path, args):
+    """Run the configured backend. Both return the same 7-tuple (see seg_inference.predict_polygons)."""
+    if args.detector == "paddle":
+        return detection_model.predict_polygons(image_path)
+    return predict_polygons(
+        detection_model,
+        image_path,
+        max_size=segmentation_max_size(args),
+        confidence_threshold=args.confidence_threshold,
+        line_percentage_threshold=args.line_percentage_threshold,
+        region_percentage_threshold=args.region_percentage_threshold,
+        line_iou=args.line_iou,
+        region_iou=args.region_iou,
+        line_overlap_threshold=args.line_overlap_threshold,
+        region_overlap_threshold=args.region_overlap_threshold,
+        tile_size=args.tile_size,
+        tile_overlap=args.tile_overlap,
+        tile_iou_threshold=args.tile_iou_threshold,
+        tile_batch_size=args.tile_batch_size,
+    )
+
 def gpu_classify_and_recognize(cropped_lines, line_polygons, line_confs,
                                classification_model, model_config, args):
     """Pure model work: script classification + routing to the right HTR model."""
@@ -628,11 +721,7 @@ def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
         torch.cuda.set_device(torch.device(device_string))
 
     print(f"[{device_string}] loading models...")
-    detection_model = load_rfdetr_model(
-        args.detection_model_path,
-        device=device_string,
-        batch_size=args.tile_batch_size if args.tile_size else 1,
-    )
+    detection_model = load_detection_model(args, device_string)
     recognition_model = processor = None
     if latin_enabled(args):
         recognition_model, processor = load_latin_recognizer(args, device_string)
@@ -663,22 +752,7 @@ def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
             kind, request_id, payload = task
 
             if kind == "predict_polygons":
-                result = predict_polygons(
-                    detection_model,
-                    payload["image_path"],
-                    max_size=segmentation_max_size(args),
-                    confidence_threshold=args.confidence_threshold,
-                    line_percentage_threshold=args.line_percentage_threshold,
-                    region_percentage_threshold=args.region_percentage_threshold,
-                    line_iou=args.line_iou,
-                    region_iou=args.region_iou,
-                    line_overlap_threshold=args.line_overlap_threshold,
-                    region_overlap_threshold=args.region_overlap_threshold,
-                    tile_size=args.tile_size,
-                    tile_overlap=args.tile_overlap,
-                    tile_iou_threshold=args.tile_iou_threshold,
-                    tile_batch_size=args.tile_batch_size,
-                )
+                result = run_detection(detection_model, payload["image_path"], args)
             elif kind == "classify_and_recognize":
                 result = gpu_classify_and_recognize(
                     payload["cropped_lines"], payload["line_polygons"],
