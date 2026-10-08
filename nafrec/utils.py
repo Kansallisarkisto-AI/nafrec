@@ -319,7 +319,11 @@ def save_json_output(data, image_path, args):
             return super().default(obj)
 
     json_name = Path(image_path).stem + '.json'
-    save_folder = args.json_folder if args.json_folder else Path(args.xml_folder,'json')
+    # json_folder, else <xml_folder>/json, else <image directory>/json (matches where the XML goes by default)
+    if args.json_folder:
+        save_folder = args.json_folder
+    else:
+        save_folder = Path(args.xml_folder or Path(image_path).parent, 'json')
     os.makedirs(save_folder, exist_ok=True)
     save_path = str(Path(save_folder, json_name))
     with open(save_path, 'w', encoding='utf8') as json_file:
