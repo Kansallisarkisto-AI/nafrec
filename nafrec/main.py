@@ -21,7 +21,7 @@ warnings.filterwarnings(
 )
 import torch
 
-from .xml_koodit import get_xml
+from .xml_output import get_xml
 from .trocr import get_text_preds, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_polygons

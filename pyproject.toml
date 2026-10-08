@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nafrec"
 version = "0.2.0"
-description = "An HTR and OCR pipeline for historical text recognition, which classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
+description = "An HTR and OCR pipeline for historical text recognition, which optionally classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
