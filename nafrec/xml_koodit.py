@@ -196,6 +196,15 @@ class AltoXML:
             The constructed ALTO XML document.
 
         """
+        script_step = "" if self.classification_model is None else f"""<Processing ID="SCRIPT_CLASSIFICATION">
+                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
+                <processingStepDescription>Text line script classification</processingStepDescription>
+                <processingSoftware>
+                    <softwareCreator>Pytorch</softwareCreator>
+                    <softwareName>MobileNet_V3_Small</softwareName>
+                    <softwareVersion>{self.classification_model}</softwareVersion>
+                </processingSoftware>
+            </Processing>"""
         # xml template where to start building the Alto xml
         newsoup=bs(f"""
         <alto xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -225,15 +234,7 @@ class AltoXML:
                     <softwareVersion>{self.line_model}</softwareVersion>
                 </processingSoftware>
             </Processing>
-            <Processing ID="SCRIPT_CLASSIFICATION">
-                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
-                <processingStepDescription>Text line script classification</processingStepDescription>
-                <processingSoftware>
-                    <softwareCreator>Pytorch</softwareCreator>
-                    <softwareName>MobileNet_V3_Small</softwareName>
-                    <softwareVersion>{self.classification_model}</softwareVersion>
-                </processingSoftware>
-            </Processing>
+            {script_step}
             <Processing ID="TEXT_RECOGNITION">
                 <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
                 <processingStepDescription>Handwritten text recognition</processingStepDescription>

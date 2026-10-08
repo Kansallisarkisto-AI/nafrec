@@ -19,6 +19,8 @@ dependencies = [
     "pydantic>=2.6.1",
     "rfdetr==1.9.1",
     "shapely>=2.0.6",
+    "psutil>=5.9",
+    "tqdm",
     "torch>=2.4.0",
     "transformers==5.10.4",
     "optimum==2.3.0",

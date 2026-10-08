@@ -4,8 +4,13 @@ import time
 import argparse
 from tqdm import tqdm
 from pathlib import Path
+from typing import Optional
 from pydantic import BaseModel
-import torch.multiprocessing as mp
+import itertools
+import traceback
+import cv2
+import psutil
+from multiprocessing import get_context
 
 # Import PyTorch and prevent useless warning
 import warnings
@@ -31,7 +36,7 @@ class XmlInput(BaseModel):
     xml_path: str
     region_segment_model_name: str
     line_segment_model_name: str
-    classification_model_name: str
+    classification_model_name: Optional[str] = None
     text_recognition_model_name: str
 
 class ClassifierInput(BaseModel):
@@ -45,7 +50,7 @@ class OCRInput(BaseModel):
     line_confs: list
     batch_size: int
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(description="Load and run inference model")
     parser.add_argument(
         "--device",
@@ -62,32 +67,32 @@ def parse_args():
     parser.add_argument(
         "--recognition_model_path",
         type=str,
-        default='/path/to/recognition_model/',
-        help="Path to the recognition model folder"
+        default=None,
+        help="Path to the (latin-script / main) recognition model folder. Optional if only the cyrillic model is used."
     )
     parser.add_argument(
         "--cyrillic_recognition_model_path",
         type=str,
-        default='/path/to/cyrillic_recognition_model/',
-        help="Path to the cyrillic recognition model folder"
+        default=None,
+        help="Path to the cyrillic recognition model folder. Optional. Script classification only runs when both the main and the cyrillic recognition models are configured; with only one of them, all lines go to it."
     )
     parser.add_argument(
         "--processor_path",
         type=str,
-        default='/path/to/processor/',
-        help="Path to the processor folder"
+        default=None,
+        help="Path to the processor folder (required with recognition_model_path, unless --use_ppocr)"
     )
     parser.add_argument(
         "--cyrillic_processor_path",
         type=str,
-        default='/path/to/cyrillic_processor/',
-        help="Path to the cyrillic processor folder"
+        default=None,
+        help="Path to the cyrillic processor folder (required if cyrillic_recognition_model_path is given)"
     )
     parser.add_argument(
         "--script_classification_model_path",
         type=str,
-        default="/path/to/classification_model.pt", 
-        help="Path to the script classification model file"
+        default=None,
+        help="Path to the script classification model file (required when both the main and the cyrillic recognition models are configured)"
     )
     parser.add_argument(
         "--input_folder",
@@ -246,10 +251,29 @@ def parse_args():
         help="Batch size for SAHI. 6 is a reasonable value."
     )
     parser.add_argument(
-        "--multi_gpu",
-        type=bool,
-        default=False,
-        help="Whether to use all GPUs on system instead of just the first one. Requires a patched version of the RF-DETR library that accepts a device argument with the rank specified."
+        "--gpu_ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="GPU indices to use (as seen after CUDA_VISIBLE_DEVICES). Default: all visible GPUs. Ignored with --device cpu."
+    )
+    parser.add_argument(
+        "--workers_per_gpu",
+        type=int,
+        default=1,
+        help="Number of model worker processes per GPU (each holds a full copy of all models in VRAM)"
+    )
+    parser.add_argument(
+        "--cpu_processes",
+        type=int,
+        default=0,
+        help="Number of CPU pre/postprocessing workers. Default: min(physical cores, 6 * number of model workers)."
+    )
+    parser.add_argument(
+        "--gpu_in_flight_limit",
+        type=int,
+        default=16,
+        help="Maximum number of GPU requests queued/in flight at once. Requests carry cropped line images, so keep this modest."
     )
 
     # PP-OCRv6 args
@@ -261,7 +285,7 @@ def parse_args():
     parser.add_argument(
         "--ppocr_model_path",
         type=str,
-        default="/path/to/ppocr_rec/inference.onnx",
+        default=None,
         help="Path to the PP-OCRv6 recognition ONNX model"
     )
     parser.add_argument(
@@ -289,8 +313,36 @@ def parse_args():
         help="Batch size for PP-OCR text recognition"
     )
         
-    args = parser.parse_args()
-    return args
+    return parser
+
+def parse_args(argv=None):
+    return build_parser().parse_args(argv)
+
+def make_args(**overrides):
+    """
+    Build an argument namespace with all CLI defaults, overridden by keyword
+    arguments (names are the CLI option names without leading dashes), e.g.
+    make_args(input_folder="imgs", gpu_ids=[0, 2], cpu_processes=12).
+    """
+    defaults = {a.dest: a.default for a in build_parser()._actions if a.dest != "help"}
+    unknown = set(overrides) - set(defaults)
+    if unknown:
+        raise TypeError(f"Unknown option(s): {sorted(unknown)}")
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+def run(input_folder, **options):
+    """
+    Library entry point, equivalent to the CLI. Returns (n_ok, n_failed).
+
+    Parallelism options: device ("cuda"/"cpu"), gpu_ids (list[int] or None = all
+    visible), workers_per_gpu, cpu_processes (0 = auto), gpu_in_flight_limit.
+    All other CLI options (detection_model_path, tile_size, ...) work the same way.
+
+    Uses the "spawn" start method, so call this from under an
+    `if __name__ == "__main__":` guard in scripts.
+    """
+    return main(make_args(input_folder=input_folder, **options))
 
 def split_by_label(classification_results):
     """
@@ -377,8 +429,9 @@ def get_text_predictions(
         # Place each result back to its original line index.
         for orig_idx, prediction in zip(indices, subset_predictions):
             classification_pred = classification_results[orig_idx]
-            prediction["predicted_script"] = classification_pred["predicted_label"]
-            prediction["script_pred_conf"] = classification_pred["confidence"]
+            if classification_pred.get("classified", True):
+                prediction["predicted_script"] = classification_pred["predicted_label"]
+                prediction["script_pred_conf"] = classification_pred["confidence"]
             all_text_predictions[orig_idx] = prediction
  
     missing = [i for i, pred in enumerate(all_text_predictions) if pred is None]
@@ -394,6 +447,69 @@ def get_text_predictions(
 
     return all_text_predictions, model_name
 
+def cyrillic_enabled(args):
+    """Is the cyrillic recognition model configured?"""
+    return bool(args.cyrillic_recognition_model_path)
+
+def latin_enabled(args):
+    """Is the main (latin-script) recognition model configured? (TrOCR, or PP-OCR with --use_ppocr)"""
+    return bool(args.ppocr_model_path if args.use_ppocr else args.recognition_model_path)
+
+def classification_enabled(args):
+    """Script classification is only meaningful (and only used) when there are two models to choose between."""
+    return latin_enabled(args) and cyrillic_enabled(args)
+
+def validate_args(args):
+    latin, cyr = latin_enabled(args), cyrillic_enabled(args)
+    if not (latin or cyr):
+        raise ValueError("No recognition model configured: set recognition_model_path "
+                         "(or ppocr_model_path with use_ppocr) and/or cyrillic_recognition_model_path")
+    required = []
+    if latin and not args.use_ppocr:
+        required.append("processor_path")
+    if cyr:
+        required.append("cyrillic_processor_path")
+    if latin and cyr:
+        required.append("script_classification_model_path")
+    missing = [n for n in required if not getattr(args, n)]
+    if missing:
+        raise ValueError(f"Missing required option(s) for the configured models: {missing}")
+    if not (latin and cyr):
+        print(f"[info] only the {'main' if latin else 'cyrillic'} recognition model is configured: "
+              "script classification disabled, all lines go to it")
+
+def classify_or_skip(cropped_lines, classification_model, model_config, args):
+    """
+    Script classification, or -- when classification_model is None -- trivial results
+    routing every line to the single configured recognizer (model_config must then have
+    exactly one entry). Such results carry classified=False so no
+    predicted_script/script_pred_conf fields are written.
+    """
+    if classification_model is None:
+        if len(model_config) != 1:
+            raise ValueError("classification_model is None but model_config has "
+                             f"{len(model_config)} recognizers; need exactly one")
+        label = next(iter(model_config))
+        return [{"predicted_label": label, "confidence": None, "fallback": False,
+                 "error": None, "classified": False} for _ in cropped_lines]
+    classifier_payload = ClassifierInput(
+        line_images=cropped_lines,
+        batch_size=args.classifier_batch_size,
+        default_label=args.classifier_default_label,
+    )
+    return classify_lines(classifier_payload, classification_model)
+
+def build_model_config(recognition_model=None, processor=None, cyrillic_recognition_model=None, cyrillic_processor=None):
+    """{label: (model, processor)} for the models that are not None (at least one required)."""
+    config = {}
+    if recognition_model is not None:
+        config["latin"] = (recognition_model, processor)
+    if cyrillic_recognition_model is not None:
+        config["cyrillic"] = (cyrillic_recognition_model, cyrillic_processor)
+    if not config:
+        raise ValueError("At least one recognition model is required")
+    return config
+
 def classify_and_recognize(
     image_path, 
     ordered_lines, 
@@ -408,6 +524,9 @@ def classify_and_recognize(
     Classify detected text lines based on their script type (latin / cyrillic)
     and forward each line to correct text recognition model.
  
+    Any of recognition_model / cyrillic_recognition_model / classification_model may be None
+    (see build_model_config / classify_or_skip).
+
     Returns (preds, trocr_model_name), or (None, None) if there was
     nothing to transcribe.
     """
@@ -418,17 +537,11 @@ def classify_and_recognize(
     # Get cropped line images
     cropped_lines = crop_lines(line_polygons, image)
     # Get classification results
-    classifier_payload = ClassifierInput(
-        line_images = cropped_lines,
-        batch_size = args.classifier_batch_size,
-        default_label = args.classifier_default_label
-    )
-    classification_results = classify_lines(classifier_payload, classification_model)
+    # Recognizers that are None are simply unused. With exactly one recognizer,
+    # pass classification_model=None: all lines go to it without classification.
+    model_config = build_model_config(recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
+    classification_results = classify_or_skip(cropped_lines, classification_model, model_config, args)
     # Get text predictions
-    model_config={
-        "cyrillic": (cyrillic_recognition_model, cyrillic_processor),
-        "latin": (recognition_model, processor),
-    }
     text_predictions, trocr_model_name = get_text_predictions(
         classification_results,
         cropped_lines,
@@ -448,137 +561,7 @@ def classify_and_recognize(
     else:
         # No lines to transcribe (e.g. detection found regions but no
         # actual lines within them)
-        return None
-
-def process_all_images(
-    images, 
-    detection_model, 
-    classification_model, 
-    recognition_model, 
-    cyrillic_recognition_model, 
-    processor, 
-    cyrillic_processor, 
-    args, 
-    rank=0
-):
-    """
-    Process a collection of images through detection, recognition, and XML output pipeline.
-
-    This function performs end-to-end OCR processing on a batch of images by:
-    1. Detecting text lines and regions using a detection model
-    2. Organizing detected lines into regions and ordering them
-    3. Classifying line images based on their script type (latin / cyrillic)
-    4. Passing text lines into cyrillic or non-cyrillic recognition model based on their text type
-    5. Recognizing text content using a the selected recognition model
-    6. Generating XML output (PAGE or ALTO format) with the recognized text
-
-    Args:
-        images: Iterable of image file paths to process
-        detection_model: Model for detecting text lines and regions in images
-        classification_model: Model for classifying line images based on their script type (latin / cyrillic)
-        recognition_model: Model for recognizing text content (using lating script) from detected lines
-        cyrillic_recognition_model: Model for recognizing text content (using cyrillic script) from detected lines
-        processor: Processor for preparing data for the recognition model
-        cyrillic_processor: Processor for preparing data for the cyrillic recognition model
-        args: Argument object containing configuration parameters including:
-            - batch_size: Threshold for line detection
-            - page_xml: Flag for PAGE XML output
-            - alto_xml: Flag for ALTO XML output
-            - region_model_name: Name of the region segmentation model
-            - line_model_name: Name of the line segmentation model
-            - text_rec_model_name: Name of the text recognition model
-
-    Returns:
-        None. Outputs are written as XML files to the same directory as input images.
-
-    Note:
-        Progress is displayed via tqdm progress bar during processing.
-    """
-    bar = tqdm(
-        images,
-        desc=f"GPU {rank}",
-        position=rank,
-        leave=True,
-        dynamic_ncols=True,
-    )
-
-    for image_path in bar:
-        try:
-            start_time = time.time()
-            line_polygons, line_confs, line_max_mins, region_polygons, region_confs, region_max_mins, image_shape = predict_polygons(
-                                        detection_model, 
-                                        image_path, 
-                                        max_size = args.tile_size * args.tiles_across - args.tile_overlap if args.tile_size else 768, 
-                                        confidence_threshold = args.confidence_threshold,
-                                        line_percentage_threshold = args.line_percentage_threshold,
-                                        region_percentage_threshold = args.region_percentage_threshold,
-                                        line_iou = args.line_iou,
-                                        region_iou = args.region_iou,
-                                        line_overlap_threshold = args.line_overlap_threshold,
-                                        region_overlap_threshold = args.region_overlap_threshold,
-                                        tile_size = args.tile_size,
-                                        tile_overlap = args.tile_overlap,
-                                        tile_iou_threshold = args.tile_iou_threshold,
-                                        tile_batch_size=args.tile_batch_size)
-            
-            predict_polygons_time = time.time() - start_time
-
-            start_time = time.time()
-            line_preds = {'coords':line_polygons,
-                        'max_min': line_max_mins,
-                        'confs':line_confs
-                        }
-
-            if len (region_polygons) > 0:
-                region_preds = []
-                for num, (region_polygon, region_conf, region_max_min) in enumerate(zip(region_polygons, region_confs, region_max_mins)):
-                    region_preds.append({'coords': region_polygon,
-                                        'id': str(num),
-                                        'max_min': region_max_min,
-                                        'name': 'paragraph',
-                                        'img_shape': image_shape,
-                                        'conf': region_conf})
-            else:
-                region_preds = get_default_region(image_shape=image_shape)
-
-            lines_connected_to_regions = get_line_regions(lines=line_preds, regions=region_preds)
-            ordered_lines = order_regions_lines(lines=lines_connected_to_regions, regions=region_preds)
-
-            if ordered_lines:
-                text_predictions, trocr_model_name = classify_and_recognize(
-                    image_path, 
-                    ordered_lines, 
-                    classification_model, 
-                    recognition_model, 
-                    cyrillic_recognition_model, 
-                    processor, 
-                    cyrillic_processor,
-                    args
-                )
-                if text_predictions:
-                    xml_input = XmlInput(image_path = image_path,
-                                        page_xml = args.page_xml,
-                                        alto_xml = args.alto_xml,
-                                        xml_path = os.path.dirname(image_path) if not args.xml_folder else args.xml_folder,
-                                        region_segment_model_name=args.region_model_name,
-                                        line_segment_model_name=args.line_model_name,
-                                        classification_model_name=args.script_classification_model_name,
-                                        text_recognition_model_name=trocr_model_name)
-                    get_xml(text_predictions, xml_input)
-                    if args.output_json:
-                        save_json_output(text_predictions, image_path, args)
-                else:
-                    print(f"[info] no transcribable lines found for {image_path}, skipping output")
-
-            else:
-                print(f"[info] no lines/regions detected for {image_path}, skipping output")
-
-            get_text_predictions_time = time.time() - start_time
-            bar.set_postfix_str(f"  predict_polygons: {predict_polygons_time:.2f} s, get_text_predictions: {get_text_predictions_time:.2f} s")
-        
-        except Exception as e:
-            print(f"[error] failed to process {image_path}: {e}")
-            continue
+        return None, None
 
 def load_latin_recognizer(args, device):
     """Returns (recognition_model, processor). processor is None for PP-OCR."""
@@ -593,64 +576,307 @@ def load_latin_recognizer(args, device):
         return model, None
     return load_trocr_model(args.recognition_model_path, args.processor_path, device)
 
+# ---------------------------------------------------------------------------
+# Device selection
+# ---------------------------------------------------------------------------
+
+def resolve_devices(args):
+    """Return the list of device strings for model workers, one per worker process."""
+    if args.device != "cuda" or not torch.cuda.is_available():
+        if args.device == "cuda":
+            print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
+        return ["cpu"]
+
+    n = torch.cuda.device_count()
+    ids = args.gpu_ids if args.gpu_ids else list(range(n))
+    bad = [i for i in ids if i < 0 or i >= n]
+    if bad:
+        raise ValueError(f"Invalid --gpu_ids {bad}: {n} GPU(s) visible")
+
+    return [f"cuda:{i}" for i in ids for _ in range(args.workers_per_gpu)]
+
+
+def segmentation_max_size(args):
+    return args.tile_size * args.tiles_across - args.tile_overlap if args.tile_size else 768
+
+
+# ---------------------------------------------------------------------------
+# GPU side
+# ---------------------------------------------------------------------------
+
+def gpu_classify_and_recognize(cropped_lines, line_polygons, line_confs,
+                               classification_model, model_config, args):
+    """Pure model work: script classification + routing to the right HTR model."""
+    classification_results = classify_or_skip(cropped_lines, classification_model, model_config, args)
+
+    # Exception objects in fallback results aren't needed downstream; keep payloads picklable
+    for r in classification_results:
+        r["error"] = None if r["error"] is None else str(r["error"])
+
+    return get_text_predictions(
+        classification_results, cropped_lines, line_polygons, line_confs,
+        model_config, args,
+    )
+
+
+def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
+    """
+    Model worker: pins itself to one device, loads all models there, then serves
+    tasks from the shared queue until it receives None.
+    """
+    if device_string.startswith("cuda"):
+        torch.cuda.set_device(torch.device(device_string))
+
+    print(f"[{device_string}] loading models...")
+    detection_model = load_rfdetr_model(
+        args.detection_model_path,
+        device=device_string,
+        batch_size=args.tile_batch_size if args.tile_size else 1,
+    )
+    recognition_model = processor = None
+    if latin_enabled(args):
+        recognition_model, processor = load_latin_recognizer(args, device_string)
+
+    cyrillic_recognition_model = cyrillic_processor = None
+    if cyrillic_enabled(args):
+        cyrillic_recognition_model, cyrillic_processor = load_trocr_model(
+            args.cyrillic_recognition_model_path,
+            args.cyrillic_processor_path,
+            device_string,
+        )
+
+    classification_model = None
+    if classification_enabled(args):
+        classification_model = load_classification_model(
+            args.script_classification_model_path, device_string)
+
+    model_config = build_model_config(
+        recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
+    print(f"[{device_string}] ready")
+
+    while True:
+        task = gpu_task_queue.get()
+        try:
+            if task is None:
+                return
+
+            kind, request_id, payload = task
+
+            if kind == "predict_polygons":
+                result = predict_polygons(
+                    detection_model,
+                    payload["image_path"],
+                    max_size=segmentation_max_size(args),
+                    confidence_threshold=args.confidence_threshold,
+                    line_percentage_threshold=args.line_percentage_threshold,
+                    region_percentage_threshold=args.region_percentage_threshold,
+                    line_iou=args.line_iou,
+                    region_iou=args.region_iou,
+                    line_overlap_threshold=args.line_overlap_threshold,
+                    region_overlap_threshold=args.region_overlap_threshold,
+                    tile_size=args.tile_size,
+                    tile_overlap=args.tile_overlap,
+                    tile_iou_threshold=args.tile_iou_threshold,
+                    tile_batch_size=args.tile_batch_size,
+                )
+            elif kind == "classify_and_recognize":
+                result = gpu_classify_and_recognize(
+                    payload["cropped_lines"], payload["line_polygons"],
+                    payload["line_confs"], classification_model, model_config, args,
+                )
+            else:
+                raise ValueError(f"Unknown GPU task kind: {kind}")
+
+            gpu_results[request_id] = {"ok": True, "result": result}
+
+        except Exception:
+            gpu_results[request_id] = {"ok": False, "error": traceback.format_exc()}
+
+        finally:
+            gpu_task_queue.task_done()
+
+
+_GPU_REQUEST_COUNTER = itertools.count()
+
+
+def run_gpu_task(gpu_task_queue, gpu_results, gpu_slots, kind, payload):
+    """Submit a task to whichever model worker is free and block until its result arrives."""
+    request_id = f"{os.getpid()}-{next(_GPU_REQUEST_COUNTER)}"
+
+    gpu_slots.acquire()
+    try:
+        gpu_task_queue.put((kind, request_id, payload))
+        while True:
+            result = gpu_results.pop(request_id, None)
+            if result is not None:
+                if result["ok"]:
+                    return result["result"]
+                raise RuntimeError(result["error"])
+            time.sleep(0.05)
+    finally:
+        gpu_slots.release()
+
+
+# ---------------------------------------------------------------------------
+# CPU side
+# ---------------------------------------------------------------------------
+
+_CPU_STATE = {}
+
+
+def init_cpu_worker(args, gpu_task_queue, gpu_results, gpu_slots):
+    # We are parallelising with processes; avoid thread oversubscription.
+    cv2.setNumThreads(1)
+    torch.set_num_threads(1)
+    _CPU_STATE.update(args=args, queue=gpu_task_queue,
+                      results=gpu_results, slots=gpu_slots)
+
+
+def process_single_image(image_path):
+    """
+    CPU worker: segmentation request -> ordering -> cropping -> recognition
+    request -> page stats / XML / JSON.
+    Returns (image_path, status, message) with status in {"ok", "info", "error"}.
+    """
+    args = _CPU_STATE["args"]
+    q, res, slots = _CPU_STATE["queue"], _CPU_STATE["results"], _CPU_STATE["slots"]
+
+    try:
+        (line_polygons, line_confs, line_max_mins, region_polygons,
+         region_confs, region_max_mins, image_shape) = run_gpu_task(
+            q, res, slots, "predict_polygons", {"image_path": image_path})
+
+        line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
+
+        if len(region_polygons) > 0:
+            region_preds = [
+                {'coords': poly, 'id': str(num), 'max_min': mm, 'name': 'paragraph',
+                 'img_shape': image_shape, 'conf': conf}
+                for num, (poly, conf, mm) in enumerate(
+                    zip(region_polygons, region_confs, region_max_mins))
+            ]
+        else:
+            region_preds = get_default_region(image_shape=image_shape)
+
+        lines_connected = get_line_regions(lines=line_preds, regions=region_preds)
+        ordered_lines = order_regions_lines(lines=lines_connected, regions=region_preds)
+
+        if not ordered_lines:
+            return image_path, "info", "no lines/regions detected, skipping output"
+
+        flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
+        if not flat_polygons:
+            return image_path, "info", "no transcribable lines found, skipping output"
+
+        image = load_with_torchvision(image_path)
+        cropped_lines = crop_lines(flat_polygons, image)
+        del image
+
+        text_predictions, htr_model_name = run_gpu_task(
+            q, res, slots, "classify_and_recognize",
+            {"cropped_lines": cropped_lines,
+             "line_polygons": flat_polygons,
+             "line_confs": flat_confs})
+
+        if not text_predictions:
+            return image_path, "info", "no transcribable lines found, skipping output"
+
+        height, width = ordered_lines[0]['img_shape']
+        lines_dict = get_page_stats(text_predictions, Path(image_path).name, height, width)
+        preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
+
+        xml_input = XmlInput(
+            image_path=image_path,
+            page_xml=args.page_xml,
+            alto_xml=args.alto_xml,
+            xml_path=os.path.dirname(image_path) if not args.xml_folder else args.xml_folder,
+            region_segment_model_name=args.region_model_name,
+            line_segment_model_name=args.line_model_name,
+            classification_model_name=args.script_classification_model_name if classification_enabled(args) else None,
+            text_recognition_model_name=htr_model_name,
+        )
+        get_xml(preds, xml_input)
+        if args.output_json:
+            save_json_output(preds, image_path, args)
+
+        return image_path, "ok", ""
+
+    except Exception:
+        return image_path, "error", traceback.format_exc()
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
 def main(args):
-    if args.device == "cuda" and not torch.cuda.is_available():
-        print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
-        args.device = "cpu"
-
-    print("Loading rfdetr model")
-    detection_model = load_rfdetr_model(args.detection_model_path, device=args.device, batch_size=args.tile_batch_size if args.tile_size else 1)
-    print("Loading script type classification model")
-    classification_model = load_classification_model(args.script_classification_model_path, args.device)
-
-    print('Loading PP-OCRv6 model for latin script' if args.use_ppocr else 'Loading TrOCR model for latin script')
-    recognition_model, processor = load_latin_recognizer(args, args.device)
-    
-    print('Loading TrOCR model for cyrillic script')
-    cyrillic_recognition_model, cyrillic_processor = load_trocr_model(args.cyrillic_recognition_model_path, args.cyrillic_processor_path, args.device)
+    validate_args(args)
+    devices = resolve_devices(args)
+    print(f"Model workers: {devices}")
 
     print('Find images in folder', str(args.input_folder))
     images = load_image_paths(args.input_folder)
     print('Found ', str(len(images)))
+    if not images:
+        return 0, 0
 
-    print('Starting HTR')
-    process_all_images(images, detection_model, classification_model, recognition_model, cyrillic_recognition_model, processor, cyrillic_processor, args)
-    print('Processing Finished')
+    n_model_workers = len(devices)
+    physical = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+    if args.cpu_processes:
+        cpu_processes = args.cpu_processes
+    elif devices == ["cpu"]:
+        cpu_processes = max(1, physical // 2)   # leave cores for the CPU-side model worker
+    else:
+        cpu_processes = max(1, min(physical, 6 * n_model_workers))
+    print(f"Starting {cpu_processes} CPU workers")
 
-def worker(rank, world_size, args):
-    # Pin this process to one GPU
-    torch.cuda.set_device(rank)
-    device_string = f"cuda:{rank}"
+    ctx = get_context("spawn")  # required for CUDA
+    manager = ctx.Manager()
+    gpu_task_queue = manager.JoinableQueue(maxsize=args.gpu_in_flight_limit)
+    gpu_results = manager.dict()
+    gpu_slots = manager.BoundedSemaphore(args.gpu_in_flight_limit)
 
-    print(f"[GPU {rank}] loading models...")
-    detection_model = load_rfdetr_model(args.detection_model_path, device=device_string, batch_size=args.tile_batch_size if args.tile_size else 1)
-    classification_model = load_classification_model(args.script_classification_model_path, device=device_string)
-    recognition_model, processor = load_latin_recognizer(args, device_string)
-    cyrillic_recognition_model, cyrillic_processor = load_trocr_model(args.cyrillic_recognition_model_path, args.cyrillic_processor_path, device=device_string)
+    gpu_workers = [
+        ctx.Process(target=gpu_worker_loop,
+                    args=(args, device, gpu_task_queue, gpu_results))
+        for device in devices
+    ]
+    for w in gpu_workers:
+        w.start()
 
-    images = load_image_paths(args.input_folder)
+    n_ok = n_err = 0
+    try:
+        with ctx.Pool(
+            processes=cpu_processes,
+            initializer=init_cpu_worker,
+            initargs=(args, gpu_task_queue, gpu_results, gpu_slots),
+        ) as pool:
+            for image_path, status, msg in tqdm(
+                pool.imap_unordered(process_single_image, images, chunksize=1),
+                total=len(images), desc="Processing images", dynamic_ncols=True,
+            ):
+                if status == "ok":
+                    n_ok += 1
+                elif status == "info":
+                    tqdm.write(f"[info] {image_path}: {msg}")
+                else:
+                    n_err += 1
+                    tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
+    finally:
+        for _ in gpu_workers:
+            gpu_task_queue.put(None)
+        gpu_task_queue.join()
+        for w in gpu_workers:
+            w.join()
 
-    # select the range of images for this worker, images are split across world_size workers
-    my_images = images[rank::world_size]
-    print(f"[GPU {rank}] got {len(my_images)} images")
+    print(f'Processing finished: {n_ok} ok, {n_err} failed')
+    return n_ok, n_err
 
-    process_all_images(my_images, detection_model, classification_model, recognition_model, cyrillic_recognition_model, processor, cyrillic_processor, args, rank=rank)
 
 def entrypoint():
     args = parse_args()
+    main(args)
 
-    if args.multi_gpu:
-        ngpu = torch.cuda.device_count()
-        print(f"{ngpu} GPUs detected")
-    else:
-        ngpu = 1
-        print("Using only first GPU.")
-    
-    if ngpu <= 1:
-        main(args)
-    else:
-        mp.set_start_method("spawn", force=True)  # important for CUDA
-        mp.spawn(worker, args=(ngpu, args), nprocs=ngpu, join=True)
 
 if __name__ == "__main__":
     entrypoint()
