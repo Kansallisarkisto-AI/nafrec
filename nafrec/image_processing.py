@@ -183,16 +183,14 @@ def upscale_bbox(bbox, original_shape, mask_shape):
 
 def crop_line(image, polygon):
     """Crops predicted text line based on the polygon coordinates
-    and returns binarised text line image.
-
-    Crop a text line from an image based on polygon coordinates and return a binarized image.
+    and returns pasted text line image with white background.
 
     Args:
         image: Input image array.
         polygon: List of coordinate pairs defining the text line polygon.
 
     Returns:
-        numpy.ndarray: Cropped and binarized text line image with white background.
+        numpy.ndarray: Cropped text line image with white background around polygon.
     """
     polygon = np.array([[int(lst[0]), int(lst[1])] for lst in polygon], dtype=np.int32)
     rect = cv2.boundingRect(polygon)
