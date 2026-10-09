@@ -27,7 +27,7 @@ dependencies = [
     "yattag>=1.16.1",
     "supervision==0.29.1",
     "huggingface-hub>=1.19.0",
-    "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
+    "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git@speedups",
 ]
 
 authors = [
