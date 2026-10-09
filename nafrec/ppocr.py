@@ -57,42 +57,60 @@ def _get_providers_and_options(device):
     return ["CPUExecutionProvider"], option
 
 
-class PPOCRRecognizer:
-    """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
+class PPOCRSession:
+    """Model-worker side: just the ONNX session. Takes an already preprocessed batch and
+    returns the raw model output; pre/post-processing live in PPOCRRecognizer (CPU side)."""
 
-    def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320):
-        # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
-        # when the PP-OCR path isn't used.
+    def __init__(self, model_path, device="cpu"):
+        # Lazy import so nafrec still works without onnxruntime when the PP-OCR path isn't used.
         import onnxruntime as ort
-        from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
         providers, options = _get_providers_and_options(device)
         self.session = ort.InferenceSession(model_path, providers=providers, sess_options=options)
         self.input_name = self.session.get_inputs()[0].name
 
+    def __call__(self, x):
+        return self.session.run(None, {self.input_name: x})[0]
+
+
+class PPOCRConfigError(ValueError):
+    """Model and character dictionary don't match; never swallowed by the retry logic."""
+
+
+class PPOCRRecognizer:
+    """PP-OCRv6 preprocessing + CTC decoding around `run`, a callable that maps a
+    preprocessed batch to the raw model output: a PPOCRSession in-process, or a request
+    to a model worker when this runs in a CPU worker."""
+
+    def __init__(self, char_dict_path, run, img_height=48, img_width_min=320):
+        # Lazy import so nafrec still works without ppocrv6_onnx when the PP-OCR path isn't used.
+        from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
+
+        self.run = run
         self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min))
         self.post = CTCLabelDecode(char_dict_path)
+        self._classes_checked = False
 
+    def _check_classes(self, n_classes):
         # PaddleOCR appends a trailing space class when Global.use_space_char=true
         # (the dict file itself doesn't contain it). Detect this from the model's
-        # output size so no extra CLI flag is needed.
-        n_classes = None
-        for out in self.session.get_outputs():
-            if out.shape and len(out.shape) == 3 and isinstance(out.shape[-1], int):
-                n_classes = out.shape[-1]
-                break
-        if n_classes is None or n_classes == self.post.vocab_size + 1:
+        # output size so no extra CLI flag is needed. Needs a model output, so it
+        # runs on the first batch instead of at load time.
+        if n_classes == self.post.vocab_size + 1:
             self.post._chars = self.post._chars + (" ",)
-        if n_classes is not None and n_classes != self.post.vocab_size:
-            raise ValueError(
+        if n_classes != self.post.vocab_size:
+            raise PPOCRConfigError(
                 f"PP-OCR model outputs {n_classes} classes but the character dictionary "
                 f"gives {self.post.vocab_size} (blank + dict [+ space]). "
                 f"Check --ppocr_char_dict_path."
             )
+        self._classes_checked = True
 
     def _recognize_batch(self, imgs_bgr):
         x = self.pre(imgs_bgr)
-        out = self.session.run(None, {self.input_name: x})[0]
+        out = self.run(x)
+        if not self._classes_checked:
+            self._check_classes(out.shape[-1])
         texts, scores = self.post(out)
         return texts, scores
 
@@ -117,6 +135,8 @@ class PPOCRRecognizer:
             imgs = [im for _, im in chunk]
             try:
                 t, s = self._recognize_batch(imgs)
+            except PPOCRConfigError:
+                raise
             except Exception as e:
                 print(f"[warn] PP-OCR batch failed ({e}) -- retrying its lines individually")
                 t, s = [], []
@@ -124,6 +144,8 @@ class PPOCRRecognizer:
                     try:
                         ti, si = self._recognize_batch([im])
                         t.extend(ti); s.extend(si)
+                    except PPOCRConfigError:
+                        raise
                     except Exception as line_e:
                         print(f"[warn] line also failed individually, inserting empty placeholder: {line_e}")
                         t.append(""); s.append(0.0)
@@ -133,7 +155,13 @@ class PPOCRRecognizer:
 
 
 def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320):
-    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min)
+    """Self-contained (in-process) recognizer."""
+    return PPOCRRecognizer(char_dict_path, PPOCRSession(model_path, device), img_height, img_width_min)
+
+
+def load_ppocr_session(model_path, device="cpu"):
+    """Model worker: the ONNX session only."""
+    return PPOCRSession(model_path, device)
 
 
 def get_ppocr_preds(data, recognizer):

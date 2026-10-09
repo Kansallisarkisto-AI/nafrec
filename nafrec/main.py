@@ -23,7 +23,7 @@ import torch
 
 from .xml_output import save_xml
 from .trocr import get_text_preds, load_trocr_model
-from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
+from .ppocr import load_ppocr_session, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons
 from .paddle_layout import load_paddle_layout_model
 from .image_processing import load_with_torchvision, crop_lines
@@ -400,13 +400,16 @@ def get_text_predictions(
     line_polygons,
     img_line_confs,
     model_config,
-    args
+    args,
+    trocr_predict=None
 ):
     """
     Routes each classified line to its matching HTR model and returns
     results back in original line order.
 
     model_config: {predicted_label: (recognition_model, processor)}
+    trocr_predict: optional replacement for get_text_preds (the CPU worker uses it to send
+      TrOCR lines to a model worker).
 
     Returns (all_text_predictions, model_name):
       all_text_predictions -- list in the same order as cropped_lines,
@@ -455,7 +458,7 @@ def get_text_predictions(
         if use_ppocr:
             subset_predictions = get_ppocr_preds(payload, model)
         else:
-            subset_predictions = get_text_preds(payload, model, processor)
+            subset_predictions = (trocr_predict or get_text_preds)(payload, model, processor)
 
         used_models.append(model_names[label])
 
@@ -611,14 +614,8 @@ def classify_and_recognize(
 def load_latin_recognizer(args, device):
     """Returns (recognition_model, processor). processor is None for PP-OCR."""
     if args.use_ppocr:
-        model = load_ppocr_model(
-            args.ppocr_model_path,
-            args.ppocr_char_dict_path,
-            device=device,
-            img_height=args.ppocr_img_height,
-            img_width_min=args.ppocr_img_width_min,
-        )
-        return model, None
+        # Just the ONNX session: pre/post-processing run in the CPU workers (init_cpu_worker)
+        return load_ppocr_session(args.ppocr_model_path, device=device), None
     return load_trocr_model(args.recognition_model_path, args.processor_path, device)
 
 # ---------------------------------------------------------------------------
@@ -774,6 +771,14 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
                     payload["cropped_lines"], payload["line_polygons"],
                     payload["line_confs"], classification_model, model_config, args,
                 )
+            elif kind == "classify":  # PP-OCR flow, see recognize_with_ppocr
+                result = classify_or_skip(payload["cropped_lines"], classification_model, model_config, args)
+                for r in result:
+                    r["error"] = None if r["error"] is None else str(r["error"])
+            elif kind == "trocr":
+                result = get_text_preds(payload["payload"], cyrillic_recognition_model, cyrillic_processor)
+            elif kind == "ppocr":
+                result = recognition_model(payload["x"])
             else:
                 raise ValueError(f"Unknown GPU task kind: {kind}")
 
@@ -820,6 +825,42 @@ def init_cpu_worker(args, inference_task_queue, inference_results, device_slots)
     torch.set_num_threads(1)
     _CPU_STATE.update(args=args, queue=inference_task_queue,
                       results=inference_results, slots=device_slots)
+    if args.use_ppocr and latin_enabled(args):
+        # PP-OCR pre/post-processing run here; only the ONNX session call goes to a model worker
+        _CPU_STATE["ppocr"] = PPOCRRecognizer(
+            args.ppocr_char_dict_path,
+            lambda x: run_inference_task(inference_task_queue, inference_results, device_slots,
+                                         "ppocr", {"x": x}),
+            img_height=args.ppocr_img_height,
+            img_width_min=args.ppocr_img_width_min,
+        )
+
+
+def recognize_with_ppocr(cropped_lines, line_polygons, line_confs):
+    """
+    CPU worker version of run_classify_and_recognize for --use_ppocr: classification and
+    TrOCR (cyrillic) run in a model worker, PP-OCR recognition is driven from here.
+    """
+    args = _CPU_STATE["args"]
+    q, res, slots = _CPU_STATE["queue"], _CPU_STATE["results"], _CPU_STATE["slots"]
+
+    # Placeholders: get_text_predictions only needs to know which label is PP-OCR
+    model_config = {}
+    if "ppocr" in _CPU_STATE:
+        model_config["latin"] = (_CPU_STATE["ppocr"], None)
+    if cyrillic_enabled(args):
+        model_config["cyrillic"] = (None, None)
+
+    if classification_enabled(args):
+        classification_results = run_inference_task(
+            q, res, slots, "classify", {"cropped_lines": cropped_lines})
+    else:
+        classification_results = classify_or_skip(cropped_lines, None, model_config, args)
+
+    return get_text_predictions(
+        classification_results, cropped_lines, line_polygons, line_confs, model_config, args,
+        trocr_predict=lambda payload, model, processor: run_inference_task(
+            q, res, slots, "trocr", {"payload": payload}))
 
 
 def predict_single_image(image_path):
@@ -865,11 +906,15 @@ def predict_single_image(image_path):
     cropped_lines = crop_lines(flat_polygons, image)
     del image
 
-    text_predictions, htr_model_name = run_inference_task(
-        q, res, slots, "classify_and_recognize",
-        {"cropped_lines": cropped_lines,
-         "line_polygons": flat_polygons,
-         "line_confs": flat_confs})
+    if args.use_ppocr:
+        text_predictions, htr_model_name = recognize_with_ppocr(
+            cropped_lines, flat_polygons, flat_confs)
+    else:
+        text_predictions, htr_model_name = run_inference_task(
+            q, res, slots, "classify_and_recognize",
+            {"cropped_lines": cropped_lines,
+             "line_polygons": flat_polygons,
+             "line_confs": flat_confs})
 
     if not text_predictions:
         return None, None, "no transcribable lines found, skipping output"
