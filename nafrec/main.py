@@ -304,7 +304,7 @@ def build_parser():
     parser.add_argument(
         "--ppocr_img_width_min",
         type=int,
-        default=1536,
+        default=320,  # could be 1536
         help="PP-OCR minimum input width (scalable)"
     )
     parser.add_argument(
