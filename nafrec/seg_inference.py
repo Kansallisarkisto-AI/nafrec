@@ -433,47 +433,36 @@ def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, o
 
     return merged_polygons, merged_confs, merged_max_mins
 
-def predict_polygons(model, 
+def predict_masks(model, 
                      image_path, 
                      max_size=768, 
                      confidence_threshold = 0.15, 
-                     line_percentage_threshold=7e-05,
-                     region_percentage_threshold=7e-05,
-                     line_iou=0.3,
-                     region_iou=0.3,
-                     line_overlap_threshold=0.5,
-                     region_overlap_threshold=0.5,
                      tile_size=0,
                      tile_overlap=128,
                      tile_iou_threshold=0.85,
                      tile_batch_size=1
                      ):
     """
-    Predict and extract line and region polygons from an image using a segmentation model.
+    Run the segmentation model on an image and return the raw line and region masks.
+    This is the model (GPU) part of polygon prediction; the CPU post-processing
+    (mask -> polygon conversion, merging, sliver filtering) is done by
+    `process_polygons` / `masks_to_polygons`.
 
     Args:
         model: Loaded RFDETR segmentation model.
         image_path: Path to the input image file.
         max_size: Maximum dimension size for image preprocessing. Default is 768.
         confidence_threshold: Minimum confidence score for detections. Default is 0.15.
-        line_percentage_threshold: Threshold value for filtering out small line polygons
-        region_percentage_threshold: Threshold value for filtering out small region polygons
-        line_iou: Threshold value for merging overlapping lines based on IoU
-        region_iou: Threshold value for merging overlapping regions based on IoU
-        line_overlap_threshold: Threshold value for merging overlapping lines based on overlap
-        region_overlap_threshold: Threshold value for merging overlapping regions based on overlap
         tile_size: Size of tiles in document pixels, for Slicing Aided Hyper Inference (SAHI). Default is 0, which disables tiling.
         tile_overlap: Overlap of SAHI tiles in pixels.
         tile_iou_threshold: IoU threshold for suppressing duplicate detections across SAHI tiles (separate from line_iou and region_iou which are applied later).
 
     Returns:
-        tuple: A 7-element tuple containing:
-            - line_polygons (list): List of polygon coordinates for detected text lines.
-            - new_line_confs (list): Confidence scores for each line polygon.
-            - line_max_mins (list): Bounding box coordinates (xmin, ymin, xmax, ymax) for each line.
-            - region_polygons (list): List of polygon coordinates for detected regions.
-            - new_region_confs (list): Confidence scores for each region polygon.
-            - region_max_mins (list): Bounding box coordinates (xmin, ymin, xmax, ymax) for each region.
+        tuple: A 5-element tuple containing:
+            - line_mask (np.ndarray): Boolean masks of detected text lines, shape (N, H, W) in model resolution.
+            - line_confs (np.ndarray): Confidence scores for each line mask.
+            - region_mask (np.ndarray): Boolean masks of detected regions.
+            - region_confs (np.ndarray): Confidence scores for each region mask.
             - image_shape (tuple): Original image dimensions (height, width).
     """
     if tile_size > 0:  # process image as tiles
@@ -525,22 +514,75 @@ def predict_polygons(model,
         image_shape = (h, w)
     else:  # loaded with torchvision
         image_shape = (image.shape[0], image.shape[1])
-    
-    
-                         
-    # Post-processing for line and region segmentation results
-    merged_line_polygons, merged_line_confs, merged_line_max_mins = process_polygons(line_mask, 
-                                                                                     line_confs, 
-                                                                                     image_shape, 
-                                                                                     line_percentage_threshold, 
-                                                                                     line_overlap_threshold, 
-                                                                                     line_iou, use_verticality=True)
 
-    merged_region_polygons, merged_region_confs, merged_region_max_mins = process_polygons(region_mask, 
-                                                                                           region_confs, 
-                                                                                           image_shape, 
-                                                                                           region_percentage_threshold, 
-                                                                                           region_overlap_threshold, 
-                                                                                           region_iou, use_verticality=False)
-                         
+    # Plain numpy arrays, so the result is cheap to pickle to the CPU workers
+    line_mask = np.asarray(line_mask, dtype=bool)
+    region_mask = np.asarray(region_mask, dtype=bool)
+    line_confs = np.asarray(line_confs)
+    region_confs = np.asarray(region_confs)
+
+    return line_mask, line_confs, region_mask, region_confs, image_shape
+
+
+def masks_to_polygons(line_mask,
+                      line_confs,
+                      region_mask,
+                      region_confs,
+                      image_shape,
+                      line_percentage_threshold=7e-05,
+                      region_percentage_threshold=7e-05,
+                      line_iou=0.3,
+                      region_iou=0.3,
+                      line_overlap_threshold=0.5,
+                      region_overlap_threshold=0.5):
+    """
+    CPU post-processing for the output of `predict_masks`: converts line and region masks to
+    polygons, merges overlapping ones and drops outliers (see `process_polygons`).
+
+    Returns:
+        tuple: A 7-element tuple containing:
+            - line_polygons (list): List of polygon coordinates for detected text lines.
+            - new_line_confs (list): Confidence scores for each line polygon.
+            - line_max_mins (list): Bounding box coordinates (xmin, ymin, xmax, ymax) for each line.
+            - region_polygons (list): List of polygon coordinates for detected regions.
+            - new_region_confs (list): Confidence scores for each region polygon.
+            - region_max_mins (list): Bounding box coordinates (xmin, ymin, xmax, ymax) for each region.
+            - image_shape (tuple): Original image dimensions (height, width).
+    """
+    merged_line_polygons, merged_line_confs, merged_line_max_mins = process_polygons(
+        line_mask, line_confs, image_shape,
+        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True)
+
+    merged_region_polygons, merged_region_confs, merged_region_max_mins = process_polygons(
+        region_mask, region_confs, image_shape,
+        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False)
+
     return merged_line_polygons, merged_line_confs, merged_line_max_mins, merged_region_polygons, merged_region_confs, merged_region_max_mins, image_shape
+
+
+def predict_polygons(model, image_path,
+                     line_percentage_threshold=7e-05,
+                     region_percentage_threshold=7e-05,
+                     line_iou=0.3,
+                     region_iou=0.3,
+                     line_overlap_threshold=0.5,
+                     region_overlap_threshold=0.5,
+                     **predict_kwargs):
+    """
+    Convenience wrapper doing both steps in the calling process: `predict_masks` followed by
+    `masks_to_polygons`. Accepts the same arguments as before (max_size, confidence_threshold,
+    tile_size, tile_overlap, tile_iou_threshold, tile_batch_size go to `predict_masks`).
+    The pipeline in main.py calls the two steps separately so that post-processing runs in
+    the CPU workers instead of the model workers.
+
+    Returns the 7-tuple described in `masks_to_polygons`.
+    """
+    line_mask, line_confs, region_mask, region_confs, image_shape = predict_masks(
+        model, image_path, **predict_kwargs)
+    return masks_to_polygons(
+        line_mask, line_confs, region_mask, region_confs, image_shape,
+        line_percentage_threshold=line_percentage_threshold,
+        region_percentage_threshold=region_percentage_threshold,
+        line_iou=line_iou, region_iou=region_iou,
+        line_overlap_threshold=line_overlap_threshold,
+        region_overlap_threshold=region_overlap_threshold)

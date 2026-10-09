@@ -24,7 +24,7 @@ import torch
 from .xml_output import save_xml
 from .trocr import get_text_preds, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
-from .seg_inference import load_rfdetr_model, predict_polygons
+from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons
 from .paddle_layout import load_paddle_layout_model
 from .image_processing import load_with_torchvision, crop_lines
 from .script_classifier import load_classification_model, classify_lines
@@ -677,24 +677,40 @@ def load_detection_model(args, device):
     )
 
 def run_detection(detection_model, image_path, args):
-    """Run the configured backend. Both return the same 7-tuple (see seg_inference.predict_polygons)."""
+    """
+    Model-worker part of segmentation.
+
+    rfdetr: returns the raw masks (see seg_inference.predict_masks); the polygon
+    post-processing happens in the CPU worker (see postprocess_detection).
+    paddle: the backend already returns the final 7-tuple (see
+    seg_inference.masks_to_polygons), so there is nothing left to post-process.
+    """
     if args.detector == "paddle":
         return detection_model.predict_polygons(image_path)
-    return predict_polygons(
+    return predict_masks(
         detection_model,
         image_path,
         max_size=segmentation_max_size(args),
         confidence_threshold=args.confidence_threshold,
+        tile_size=args.tile_size,
+        tile_overlap=args.tile_overlap,
+        tile_iou_threshold=args.tile_iou_threshold,
+        tile_batch_size=args.tile_batch_size,
+    )
+
+def postprocess_detection(detection_result, args):
+    """CPU-worker part of segmentation: raw masks -> merged line/region polygons (the 7-tuple)."""
+    if args.detector == "paddle":
+        return detection_result
+    line_mask, line_confs, region_mask, region_confs, image_shape = detection_result
+    return masks_to_polygons(
+        line_mask, line_confs, region_mask, region_confs, image_shape,
         line_percentage_threshold=args.line_percentage_threshold,
         region_percentage_threshold=args.region_percentage_threshold,
         line_iou=args.line_iou,
         region_iou=args.region_iou,
         line_overlap_threshold=args.line_overlap_threshold,
         region_overlap_threshold=args.region_overlap_threshold,
-        tile_size=args.tile_size,
-        tile_overlap=args.tile_overlap,
-        tile_iou_threshold=args.tile_iou_threshold,
-        tile_batch_size=args.tile_batch_size,
     )
 
 def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
@@ -808,8 +824,8 @@ def init_cpu_worker(args, inference_task_queue, inference_results, device_slots)
 
 def predict_single_image(image_path):
     """
-    CPU worker: segmentation request -> ordering -> cropping -> recognition
-    request -> page stats.
+    CPU worker: segmentation request -> polygon post-processing -> ordering ->
+    cropping -> recognition request -> page stats.
     Returns (preds, xml_input, msg). preds/xml_input are exactly what get_xml(preds, xml_input)
     (and save_json_output(preds, ...)) take; both are None, with an explanation in msg,
     when there was nothing to output.
@@ -817,9 +833,11 @@ def predict_single_image(image_path):
     args = _CPU_STATE["args"]
     q, res, slots = _CPU_STATE["queue"], _CPU_STATE["results"], _CPU_STATE["slots"]
 
-    (line_polygons, line_confs, line_max_mins, region_polygons,
-     region_confs, region_max_mins, image_shape) = run_inference_task(
+    detection_result = run_inference_task(
         q, res, slots, "predict_polygons", {"image_path": image_path})
+    # Mask -> polygon post-processing runs here in the CPU worker, not in the model worker
+    (line_polygons, line_confs, line_max_mins, region_polygons,
+     region_confs, region_max_mins, image_shape) = postprocess_detection(detection_result, args)
 
     line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
 
