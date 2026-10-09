@@ -762,7 +762,7 @@ class RecognitionPool:
         use_ppocr = isinstance(self.model_config[label][0], PPOCRRecognizer)
         return self.args.ppocr_batch_size if use_ppocr else self.args.trocr_batch_size
 
-    def add(self, request_id, classification_results, cropped_lines, line_polygons, line_confs):
+    def add(self, request_id, classification_results, cropped_lines, line_polygons, line_confs, arrival=None):
         indices_by_label = split_by_label(classification_results)
         for label, indices in indices_by_label.items():
             if label not in self.model_config:
@@ -779,7 +779,7 @@ class RecognitionPool:
         if n == 0:
             self._finish(request_id)
             return
-        now = time.monotonic()
+        now = time.monotonic() if arrival is None else arrival
         for label, indices in indices_by_label.items():
             self.pending[label].extend(
                 (now, request_id, i, cropped_lines[i], _aspect(cropped_lines[i])) for i in indices)
@@ -842,29 +842,25 @@ class RecognitionPool:
         for label in self.pending:
             self._drain(label, only_full=True)
 
-    def run_expired(self):
-        """Run everything pending for a label whose oldest line has waited at least max_wait."""
-        for label in self.pending:
-            entries = self.pending[label]
-            if entries and time.monotonic() - min(e[0] for e in entries) >= self.max_wait:
-                self._drain(label, only_full=False)
-
     def run_all(self):
         for label in self.pending:
             self._drain(label, only_full=False)
 
-    def seconds_until_expiry(self):
-        """None if nothing is pending, else seconds until the oldest pending line hits max_wait."""
-        oldest = [min(e[0] for e in entries) for entries in self.pending.values() if entries]
-        if not oldest:
-            return None
-        return max(0.0, min(oldest) + self.max_wait - time.monotonic())
+    def n_pending(self):
+        return sum(len(entries) for entries in self.pending.values())
+
+    def oldest_arrival(self):
+        return min((e[0] for entries in self.pending.values() for e in entries), default=None)
+
+    def full_batch_lines(self):
+        """Lines needed for a complete batch (the largest batch size of the configured recognizers)."""
+        return max(self._batch_size(label) for label in self.model_config)
 
 
-def inference_worker_loop(args, device_string, inference_task_queue, inference_results):
+def inference_worker_loop(args, device_string, inference_queues, inference_results):
     """
     Model worker: pins itself to one device, loads all models there, then serves
-    tasks from the shared queue until it receives None.
+    tasks from the shared queues until it receives None.
     """
     if device_string.startswith("cuda"):
         torch.cuda.set_device(torch.device(device_string))
@@ -891,57 +887,91 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
     model_config = build_model_config(
         recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
     pool = RecognitionPool(model_config, args, inference_results)
+    max_wait = args.recognition_max_wait_ms / 1000.0
+    detect_queue = inference_queues["detect"]
+    recognize_queue = inference_queues["recognize"]
+    recognize_index = inference_queues["recognize_index"]  # request_id -> (enqueue time, n lines), for jobs still queued
     print(f"[{device_string}] ready")
+
+    def take_recognition_job():
+        """Move one queued recognition job into the pool (classify now, recognize in batches). False if none."""
+        try:
+            kind, request_id, payload = recognize_queue.get_nowait()
+        except Empty:
+            return False
+        try:
+            entry = recognize_index.pop(request_id, None)
+            classification_results = classify_or_skip(
+                payload["cropped_lines"], classification_model, model_config, args)
+            pool.add(request_id, classification_results, payload["cropped_lines"],
+                     payload["line_polygons"], payload["line_confs"],
+                     arrival=entry[0] if entry else None)
+        except Exception:
+            inference_results[request_id] = {"ok": False, "error": traceback.format_exc()}
+        finally:
+            recognize_queue.task_done()
+        return True
 
     while True:
         pool.run_full()
+        queued = list(recognize_index.values())
+        queued_lines = sum(n for _, n in queued)
+
+        # 1. Recognition jobs stay in the queue (visible to other workers) while detection jobs
+        #    are served; they are taken only once they can form a complete batch.
+        if queued and queued_lines + pool.n_pending() >= pool.full_batch_lines():
+            if take_recognition_job():
+                continue
+
+        # 2. Otherwise take only detection jobs
         try:
-            # While lines are waiting, always take whatever job is available (detection jobs
-            # produce more lines to fill the waiting batches). timeout=0 once the wait is up.
-            task = inference_task_queue.get(timeout=pool.seconds_until_expiry())
+            task = detect_queue.get_nowait()
         except Empty:
-            # Nothing left to take and the oldest pending line has waited long enough
-            pool.run_expired()
+            # 3. No detection job to wait for: run partial batches once the oldest line has waited long enough
+            oldest = [t for t, _ in queued] + ([pool.oldest_arrival()] if pool.n_pending() else [])
+            if oldest and time.monotonic() - min(oldest) >= max_wait:
+                while take_recognition_job():
+                    pass
+                pool.run_all()
+            else:
+                time.sleep(0.01)
             continue
+
         try:
             if task is None:
+                while take_recognition_job():
+                    pass
                 pool.run_all()
                 return
 
             kind, request_id, payload = task
-
-            if kind == "predict_polygons":
-                result = run_detection(detection_model, payload["image_path"], args)
-            elif kind == "classify_and_recognize":
-                # Classify now, recognize later: the lines join the pool and the result is
-                # published by the pool once all of this page's lines are done.
-                classification_results = classify_or_skip(
-                    payload["cropped_lines"], classification_model, model_config, args)
-                pool.add(request_id, classification_results, payload["cropped_lines"],
-                         payload["line_polygons"], payload["line_confs"])
-                continue
-            else:
+            if kind != "predict_polygons":
                 raise ValueError(f"Unknown GPU task kind: {kind}")
-
+            result = run_detection(detection_model, payload["image_path"], args)
             inference_results[request_id] = {"ok": True, "result": result}
 
         except Exception:
             inference_results[request_id] = {"ok": False, "error": traceback.format_exc()}
 
         finally:
-            inference_task_queue.task_done()
+            detect_queue.task_done()
 
 
 _INFERENCE_REQUEST_COUNTER = itertools.count()
 
 
-def run_inference_task(inference_task_queue, inference_results, device_slots, kind, payload):
+def run_inference_task(inference_queues, inference_results, device_slots, kind, payload):
     """Submit a task to whichever model worker is free and block until its result arrives."""
     request_id = f"{os.getpid()}-{next(_INFERENCE_REQUEST_COUNTER)}"
 
     device_slots.acquire()
     try:
-        inference_task_queue.put((kind, request_id, payload))
+        if kind == "classify_and_recognize":
+            # Register the queued line count first, so workers can tell when a full batch is waiting
+            inference_queues["recognize_index"][request_id] = (time.monotonic(), len(payload["cropped_lines"]))
+            inference_queues["recognize"].put((kind, request_id, payload))
+        else:
+            inference_queues["detect"].put((kind, request_id, payload))
         while True:
             result = inference_results.pop(request_id, None)
             if result is not None:
@@ -960,11 +990,11 @@ def run_inference_task(inference_task_queue, inference_results, device_slots, ki
 _CPU_STATE = {}
 
 
-def init_cpu_worker(args, inference_task_queue, inference_results, device_slots):
+def init_cpu_worker(args, inference_queues, inference_results, device_slots):
     # We are parallelising with processes; avoid thread oversubscription.
     cv2.setNumThreads(1)
     torch.set_num_threads(1)
-    _CPU_STATE.update(args=args, queue=inference_task_queue,
+    _CPU_STATE.update(args=args, queue=inference_queues,
                       results=inference_results, slots=device_slots)
 
 
@@ -1082,13 +1112,17 @@ def main(args):
 
     ctx = get_context("spawn")  # required for CUDA
     manager = ctx.Manager()
-    inference_task_queue = manager.JoinableQueue(maxsize=args.inference_in_flight_limit)
+    inference_queues = {
+        "detect": manager.JoinableQueue(maxsize=args.inference_in_flight_limit),
+        "recognize": manager.JoinableQueue(maxsize=args.inference_in_flight_limit),
+        "recognize_index": manager.dict(),
+    }
     inference_results = manager.dict()
     device_slots = manager.BoundedSemaphore(args.inference_in_flight_limit)
 
     inference_workers = [
         ctx.Process(target=inference_worker_loop,
-                    args=(args, device, inference_task_queue, inference_results))
+                    args=(args, device, inference_queues, inference_results))
         for device in devices
     ]
     for w in inference_workers:
@@ -1099,7 +1133,7 @@ def main(args):
         with ctx.Pool(
             processes=cpu_processes,
             initializer=init_cpu_worker,
-            initargs=(args, inference_task_queue, inference_results, device_slots),
+            initargs=(args, inference_queues, inference_results, device_slots),
         ) as pool:
             for image_path, status, msg in tqdm(
                 pool.imap_unordered(process_single_image, images, chunksize=1),
@@ -1114,8 +1148,9 @@ def main(args):
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
         for _ in inference_workers:
-            inference_task_queue.put(None)
-        inference_task_queue.join()
+            inference_queues["detect"].put(None)
+        inference_queues["detect"].join()
+        inference_queues["recognize"].join()
         for w in inference_workers:
             w.join()
 
