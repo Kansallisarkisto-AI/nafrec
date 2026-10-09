@@ -8,6 +8,7 @@ from typing import Optional
 from pydantic import BaseModel
 import itertools
 import traceback
+from queue import Empty
 import cv2
 import psutil
 from multiprocessing import get_context
@@ -22,7 +23,7 @@ warnings.filterwarnings(
 import torch
 
 from .xml_output import save_xml
-from .trocr import get_text_preds, load_trocr_model
+from .trocr import get_text_preds, get_text_lines, get_line_dicts, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons
 from .paddle_layout import load_paddle_layout_model
@@ -275,6 +276,13 @@ def build_parser():
         type=int,
         default=16,
         help="Maximum number of GPU requests queued/in flight at once. Requests carry cropped line images, so keep this modest."
+    )
+
+    parser.add_argument(
+        "--recognition_max_wait_ms",
+        type=float,
+        default=200.0,
+        help="Work stealing for text recognition: lines from queued pages are pooled so that complete batches can be formed. A partial batch is only run when its oldest line has waited this long (ms). 0 = never wait."
     )
 
     # PP-OCRv6 args
@@ -728,6 +736,127 @@ def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
     )
 
 
+def _aspect(img):
+    try:
+        return img.shape[1] / max(1, img.shape[0])
+    except Exception:
+        return 0.0
+
+
+class RecognitionPool:
+    """
+    Worker-local pool of cropped lines (from any number of queued pages) awaiting recognition.
+    Complete batches are run as soon as they can be formed; a partial batch is run only once its
+    oldest line has waited max_wait seconds. A page's result is published once all its lines are done.
+    """
+
+    def __init__(self, model_config, args, inference_results):
+        self.model_config = model_config
+        self.args = args
+        self.results = inference_results
+        self.max_wait = args.recognition_max_wait_ms / 1000.0
+        self.pending = {label: [] for label in model_config}  # (arrival, request_id, line_idx, image, aspect)
+        self.requests = {}
+
+    def _batch_size(self, label):
+        use_ppocr = isinstance(self.model_config[label][0], PPOCRRecognizer)
+        return self.args.ppocr_batch_size if use_ppocr else self.args.trocr_batch_size
+
+    def add(self, request_id, classification_results, cropped_lines, line_polygons, line_confs):
+        indices_by_label = split_by_label(classification_results)
+        for label, indices in indices_by_label.items():
+            if label not in self.model_config:
+                raise ValueError(
+                    f"No HTR model configured for predicted_label={label} "
+                    f"({len(indices)} line(s) affected)"
+                )
+        n = len(cropped_lines)
+        self.requests[request_id] = {
+            "classification": classification_results, "polygons": line_polygons, "confs": line_confs,
+            "texts": [None] * n, "scores": [None] * n, "remaining": n,
+            "labels": list(indices_by_label),
+        }
+        if n == 0:
+            self._finish(request_id)
+            return
+        now = time.monotonic()
+        for label, indices in indices_by_label.items():
+            self.pending[label].extend(
+                (now, request_id, i, cropped_lines[i], _aspect(cropped_lines[i])) for i in indices)
+
+    def _recognize(self, label, images):
+        """One batch (len(images) <= batch size) -> (scores, texts)."""
+        model, processor = self.model_config[label]
+        if isinstance(model, PPOCRRecognizer):
+            return model.recognize(images, len(images))
+        return get_text_lines(images, len(images), model, processor)
+
+    def _run_batch(self, label, entries):
+        try:
+            scores, texts = self._recognize(label, [e[3] for e in entries])
+            if len(texts) != len(entries) or len(scores) != len(entries):
+                raise ValueError(f"{label} HTR model returned {len(texts)} result(s) for {len(entries)} input line(s)")
+        except Exception:
+            error = traceback.format_exc()
+            for request_id in {e[1] for e in entries}:
+                self._fail(request_id, error)
+            return
+        for (_, request_id, i, _, _), text, score in zip(entries, texts, scores):
+            req = self.requests.get(request_id)
+            if req is None:  # request already failed
+                continue
+            req["texts"][i], req["scores"][i] = text, score
+            req["remaining"] -= 1
+            if req["remaining"] == 0:
+                self._finish(request_id)
+
+    def _fail(self, request_id, error):
+        self.requests.pop(request_id, None)
+        self.results[request_id] = {"ok": False, "error": error}
+
+    def _finish(self, request_id):
+        req = self.requests.pop(request_id)
+        model_names = {"cyrillic": self.args.cyrillic_text_rec_model_name,
+                       "latin": self.args.text_rec_model_name}
+        predictions = get_line_dicts(req["polygons"], req["texts"], req["confs"], req["scores"])
+        for prediction, c in zip(predictions, req["classification"]):
+            if c.get("classified", True):
+                prediction["predicted_script"] = c["predicted_label"]
+                prediction["script_pred_conf"] = c["confidence"]
+        model_name = " and ".join(model_names[label] for label in req["labels"])
+        self.results[request_id] = {"ok": True, "result": (predictions, model_name)}
+
+    def _drain(self, label, only_full):
+        entries = self.pending[label]
+        bs = self._batch_size(label)
+        n_run = len(entries) // bs * bs if only_full else len(entries)
+        if n_run == 0:
+            return
+        entries.sort(key=lambda e: e[4])  # similar widths together -> less padding
+        to_run, self.pending[label] = entries[:n_run], entries[n_run:]
+        for start in range(0, n_run, bs):
+            self._run_batch(label, to_run[start:start + bs])
+
+    def run_ready(self):
+        """Run all complete batches, and everything pending for a label whose oldest line has waited too long."""
+        for label in self.pending:
+            self._drain(label, only_full=True)
+            entries = self.pending[label]
+            if entries and time.monotonic() - min(e[0] for e in entries) >= self.max_wait:
+                self._drain(label, only_full=False)
+
+    def run_all(self):
+        for label in self.pending:
+            self._drain(label, only_full=False)
+
+    def seconds_until_expiry(self):
+        """None if nothing is pending, else seconds until the oldest pending line hits max_wait."""
+        oldest = [min(e[0] for e in entries) for entries in self.pending.values() if entries]
+        if not oldest:
+            return None
+        return max(0.0, min(oldest) + self.max_wait - time.monotonic())
+
+
 def inference_worker_loop(args, device_string, inference_task_queue, inference_results):
     """
     Model worker: pins itself to one device, loads all models there, then serves
@@ -757,12 +886,18 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
 
     model_config = build_model_config(
         recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
+    pool = RecognitionPool(model_config, args, inference_results)
     print(f"[{device_string}] ready")
 
     while True:
-        task = inference_task_queue.get()
+        pool.run_ready()
+        try:
+            task = inference_task_queue.get(timeout=pool.seconds_until_expiry())
+        except Empty:
+            continue  # oldest pending line has waited long enough; run_ready flushes it
         try:
             if task is None:
+                pool.run_all()
                 return
 
             kind, request_id, payload = task
@@ -770,10 +905,13 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
             if kind == "predict_polygons":
                 result = run_detection(detection_model, payload["image_path"], args)
             elif kind == "classify_and_recognize":
-                result = run_classify_and_recognize(
-                    payload["cropped_lines"], payload["line_polygons"],
-                    payload["line_confs"], classification_model, model_config, args,
-                )
+                # Classify now, recognize later: the lines join the pool and the result is
+                # published by the pool once all of this page's lines are done.
+                classification_results = classify_or_skip(
+                    payload["cropped_lines"], classification_model, model_config, args)
+                pool.add(request_id, classification_results, payload["cropped_lines"],
+                         payload["line_polygons"], payload["line_confs"])
+                continue
             else:
                 raise ValueError(f"Unknown GPU task kind: {kind}")
 
