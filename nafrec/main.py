@@ -262,7 +262,7 @@ def build_parser():
         "--workers_per_gpu",
         type=int,
         default=1,
-        help="Number of model worker processes per GPU (each holds a full copy of all models in VRAM)"
+        help="Number of model worker processes per GPU (each holds a full copy of all models in VRAM). Increasing to 2 may speed up inference by around 25% but takes twice the VRAM."
     )
     parser.add_argument(
         "--cpu_processes",
