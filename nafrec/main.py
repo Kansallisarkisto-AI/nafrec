@@ -786,7 +786,7 @@ def run_inference_task(inference_task_queue, inference_results, device_slots, ki
                 if result["ok"]:
                     return result["result"]
                 raise RuntimeError(result["error"])
-            time.sleep(0.001)
+            time.sleep(0.01)
     finally:
         device_slots.release()
 
