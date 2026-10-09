@@ -21,7 +21,7 @@ warnings.filterwarnings(
 )
 import torch
 
-from .xml_output import get_xml
+from .xml_output import save_xml
 from .trocr import get_text_preds, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .seg_inference import load_rfdetr_model, predict_polygons
@@ -806,75 +806,87 @@ def init_cpu_worker(args, inference_task_queue, inference_results, device_slots)
                       results=inference_results, slots=device_slots)
 
 
-def process_single_image(image_path):
+def predict_single_image(image_path):
     """
     CPU worker: segmentation request -> ordering -> cropping -> recognition
-    request -> page stats / XML / JSON.
-    Returns (image_path, status, message) with status in {"ok", "info", "error"}.
+    request -> page stats.
+    Returns (preds, xml_input, msg). preds/xml_input are exactly what get_xml(preds, xml_input)
+    (and save_json_output(preds, ...)) take; both are None, with an explanation in msg,
+    when there was nothing to output.
     """
     args = _CPU_STATE["args"]
     q, res, slots = _CPU_STATE["queue"], _CPU_STATE["results"], _CPU_STATE["slots"]
 
+    (line_polygons, line_confs, line_max_mins, region_polygons,
+     region_confs, region_max_mins, image_shape) = run_inference_task(
+        q, res, slots, "predict_polygons", {"image_path": image_path})
+
+    line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
+
+    if len(region_polygons) > 0:
+        region_preds = [
+            {'coords': poly, 'id': str(num), 'max_min': mm, 'name': 'paragraph',
+             'img_shape': image_shape, 'conf': conf}
+            for num, (poly, conf, mm) in enumerate(
+                zip(region_polygons, region_confs, region_max_mins))
+        ]
+    else:
+        region_preds = get_default_region(image_shape=image_shape)
+
+    lines_connected = get_line_regions(lines=line_preds, regions=region_preds)
+    ordered_lines = order_regions_lines(lines=lines_connected, regions=region_preds)
+
+    if not ordered_lines:
+        return None, None, "no lines/regions detected, skipping output"
+
+    flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
+    if not flat_polygons:
+        return None, None, "no transcribable lines found, skipping output"
+
+    image = load_with_torchvision(image_path)
+    cropped_lines = crop_lines(flat_polygons, image)
+    del image
+
+    text_predictions, htr_model_name = run_inference_task(
+        q, res, slots, "classify_and_recognize",
+        {"cropped_lines": cropped_lines,
+         "line_polygons": flat_polygons,
+         "line_confs": flat_confs})
+
+    if not text_predictions:
+        return None, None, "no transcribable lines found, skipping output"
+
+    height, width = ordered_lines[0]['img_shape']
+    lines_dict = get_page_stats(text_predictions, Path(image_path).name, height, width)
+    preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
+
+    xml_input = XmlInput(
+        image_path=image_path,
+        page_xml=args.page_xml,
+        alto_xml=args.alto_xml,
+        xml_path=os.path.dirname(image_path) if not args.xml_folder else args.xml_folder,
+        region_segment_model_name=args.region_model_name,
+        line_segment_model_name=args.line_model_name,
+        classification_model_name=args.script_classification_model_name if classification_enabled(args) else None,
+        text_recognition_model_name=htr_model_name,
+    )
+    return preds, xml_input, ""
+
+
+def process_single_image(image_path):
+    """
+    CPU worker: predict_single_image + write XML/JSON.
+    Returns (image_path, status, message) with status in {"ok", "info", "error"}.
+    """
+    args = _CPU_STATE["args"]
     try:
-        (line_polygons, line_confs, line_max_mins, region_polygons,
-         region_confs, region_max_mins, image_shape) = run_inference_task(
-            q, res, slots, "predict_polygons", {"image_path": image_path})
-
-        line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
-
-        if len(region_polygons) > 0:
-            region_preds = [
-                {'coords': poly, 'id': str(num), 'max_min': mm, 'name': 'paragraph',
-                 'img_shape': image_shape, 'conf': conf}
-                for num, (poly, conf, mm) in enumerate(
-                    zip(region_polygons, region_confs, region_max_mins))
-            ]
-        else:
-            region_preds = get_default_region(image_shape=image_shape)
-
-        lines_connected = get_line_regions(lines=line_preds, regions=region_preds)
-        ordered_lines = order_regions_lines(lines=lines_connected, regions=region_preds)
-
-        if not ordered_lines:
-            return image_path, "info", "no lines/regions detected, skipping output"
-
-        flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
-        if not flat_polygons:
-            return image_path, "info", "no transcribable lines found, skipping output"
-
-        image = load_with_torchvision(image_path)
-        cropped_lines = crop_lines(flat_polygons, image)
-        del image
-
-        text_predictions, htr_model_name = run_inference_task(
-            q, res, slots, "classify_and_recognize",
-            {"cropped_lines": cropped_lines,
-             "line_polygons": flat_polygons,
-             "line_confs": flat_confs})
-
-        if not text_predictions:
-            return image_path, "info", "no transcribable lines found, skipping output"
-
-        height, width = ordered_lines[0]['img_shape']
-        lines_dict = get_page_stats(text_predictions, Path(image_path).name, height, width)
-        preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
-
-        xml_input = XmlInput(
-            image_path=image_path,
-            page_xml=args.page_xml,
-            alto_xml=args.alto_xml,
-            xml_path=os.path.dirname(image_path) if not args.xml_folder else args.xml_folder,
-            region_segment_model_name=args.region_model_name,
-            line_segment_model_name=args.line_model_name,
-            classification_model_name=args.script_classification_model_name if classification_enabled(args) else None,
-            text_recognition_model_name=htr_model_name,
-        )
-        get_xml(preds, xml_input)
+        preds, xml_input, msg = predict_single_image(image_path)
+        if preds is None:
+            return image_path, "info", msg
+        save_xml(preds, xml_input)
         if args.output_json:
             save_json_output(preds, image_path, args)
-
         return image_path, "ok", ""
-
     except Exception:
         return image_path, "error", traceback.format_exc()
 

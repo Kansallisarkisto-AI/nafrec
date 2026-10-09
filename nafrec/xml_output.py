@@ -7,7 +7,7 @@ import datetime
 
 class PageXML:
 
-    def save_page(self, xml_file, path):
+    def write_page(self, xml_file, path):
         """Saves Page xml file."""
         xml_file.write(path, xml_declaration=True, encoding='utf-8', method="xml")
         #print('Page XML file saved to ', path)
@@ -86,10 +86,13 @@ class PageXML:
         xml_doc = etree.ElementTree(root)
 
         return xml_doc
+
+    def get_page(self, page_dict, image_path):
+        return self.create_xml(page_dict, image_path)
     
-    def get_page(self, page_dict, image_path, save_path):
+    def save_page(self, page_dict, image_path, save_path):
         page = self.create_xml(page_dict, image_path)
-        self.save_page(page, save_path)
+        self.write_page(page, save_path)
 
 
 class AltoXML:
@@ -99,7 +102,7 @@ class AltoXML:
         self.classification_model = classification_model
         self.htr_model = htr_model
     
-    def save_alto(self, newsoup, path):
+    def write_alto(self, newsoup, path):
         """Saves Alto xml file."""
         with open(path,"w") as f: 
             f.write(indent(str(newsoup))) 
@@ -379,12 +382,15 @@ class AltoXML:
 
         return newsoup
 
-    def get_alto(self, page_dict, image_path, save_path):
+    def get_alto(self, page_dict, image_path):
+        return self.create_xml(page_dict, image_path)
+
+    def save_alto(self, page_dict, image_path, save_path):
         alto = self.create_xml(page_dict, image_path)
-        self.save_alto(alto, save_path)
+        self.write_alto(alto, save_path)
 
 
-def get_xml(text_predictions, input_data):
+def save_xml(text_predictions, input_data):
     """Function for saving the results in xml file.
     
     Save OCR results to XML file in PAGE and/or ALTO format.
@@ -411,11 +417,11 @@ def get_xml(text_predictions, input_data):
         save_folder = Path(input_data.xml_path, 'page')
         os.makedirs(save_folder, exist_ok=True)
         save_path = str(Path(save_folder, xml_name))
-        page_maker.get_page(text_predictions, input_data.image_path, save_path)
+        page_maker.save_page(text_predictions, input_data.image_path, save_path)
     # Alto XML option
     if input_data.alto_xml and input_data.xml_path:
         save_folder = Path(input_data.xml_path, 'alto')
         os.makedirs(save_folder, exist_ok=True)
         save_path = str(Path(save_folder, xml_name))
         alto_maker = AltoXML(input_data.region_segment_model_name, input_data.line_segment_model_name, input_data.classification_model_name, input_data.text_recognition_model_name)
-        alto_maker.get_alto(text_predictions, input_data.image_path, save_path)
+        alto_maker.save_alto(text_predictions, input_data.image_path, save_path)
