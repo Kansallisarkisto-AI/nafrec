@@ -106,7 +106,7 @@ class AltoXML:
         """Saves Alto xml file."""
         with open(path,"w") as f: 
             f.write(indent(str(newsoup))) 
-        print('XML file saved to ', path)
+        #print('XML file saved to ', path)
 
     def format_polygon(self, polygon):
         """Formats polygon from a list of lists into a string."""
