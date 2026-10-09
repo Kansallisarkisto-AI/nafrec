@@ -837,10 +837,14 @@ class RecognitionPool:
         for start in range(0, n_run, bs):
             self._run_batch(label, to_run[start:start + bs])
 
-    def run_ready(self):
-        """Run all complete batches, and everything pending for a label whose oldest line has waited too long."""
+    def run_full(self):
+        """Run all complete batches."""
         for label in self.pending:
             self._drain(label, only_full=True)
+
+    def run_expired(self):
+        """Run everything pending for a label whose oldest line has waited at least max_wait."""
+        for label in self.pending:
             entries = self.pending[label]
             if entries and time.monotonic() - min(e[0] for e in entries) >= self.max_wait:
                 self._drain(label, only_full=False)
@@ -890,11 +894,15 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
     print(f"[{device_string}] ready")
 
     while True:
-        pool.run_ready()
+        pool.run_full()
         try:
+            # While lines are waiting, always take whatever job is available (detection jobs
+            # produce more lines to fill the waiting batches). timeout=0 once the wait is up.
             task = inference_task_queue.get(timeout=pool.seconds_until_expiry())
         except Empty:
-            continue  # oldest pending line has waited long enough; run_ready flushes it
+            # Nothing left to take and the oldest pending line has waited long enough
+            pool.run_expired()
+            continue
         try:
             if task is None:
                 pool.run_all()
