@@ -1,114 +1,151 @@
-from torchvision.io import read_image, ImageReadMode
-import numpy as np
-from torchvision.transforms import v2 as transforms_v2
-import torch
+from pathlib import Path
+ 
 import cv2
-
-def load_with_torchvision(img_path):
+import numpy as np
+import torch
+import torchvision.transforms.v2.functional as F
+from PIL import Image
+from torchvision.io import ImageReadMode, read_image
+ 
+# Keep OpenCV from fighting with DataLoader workers; harmless otherwise.
+# For single-process use you can remove this or call cv2.setNumThreads(n).
+cv2.setNumThreads(0)
+ 
+ 
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+def _target_size(h, w, max_size, mode="smaller"):
     """
-    Load an image using torchvision and convert to numpy array.
-
-    Args:
-        img_path (str or Path): Path to the image file
-
-    Returns:
-        numpy.ndarray: Image array in RGB format with shape (H, W, C)
+    Return (new_h, new_w), or None if no resize is needed.
+ 
+    mode="smaller": the smaller edge is capped at max_size (larger edge free).
+    mode="longer":  the longer edge is capped at max_size.
     """
-    # Read as tensor
-    img_tensor = read_image(str(img_path), mode= ImageReadMode.RGB)
-    # Convert to numpy: (C, H, W) -> (H, W, C)
-    img_np = img_tensor.permute(1, 2, 0).numpy()
-    return img_np
-
-def preprocess_resize_smallerof_wh_torch_transform(image, max_size=1024, normalize=True):
-    """
-    Resize so that the *smaller* of (width, height) is at most max_size.
-    The larger dimension is allowed to grow arbitrarily.
-
-    Args:
-        image: torch.Tensor (C, H, W) or PIL Image
-        max_size: maximum size for the *smaller* dimension
-        normalize: whether to normalize to [0, 1] range
-
-    Returns:
-        torch.Tensor (C, H, W) or PIL Image (same type as input)
-    """
-    # Convert numpy -> torch
+    ref = min(h, w) if mode == "smaller" else max(h, w)
+    if ref <= max_size:
+        return None
+    s = max_size / ref
+    return max(1, round(h * s)), max(1, round(w * s))
+ 
+ 
+def _to_chw_tensor(image):
+    """numpy (H, W, C) / torch (C, H, W) -> torch (C, H, W), no extra copies if avoidable."""
     if isinstance(image, np.ndarray):
-        image = torch.from_numpy(image)
-        if image.ndim == 3 and image.shape[2] in [1, 3]:
-            image = image.permute(2, 0, 1)
-
-    # Extract H, W
+        if image.ndim == 2:
+            image = image[:, :, None]
+        return torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1)
+    return image
+ 
+ 
+def worker_init_fn(_worker_id):
+    """Pass as DataLoader(worker_init_fn=...) to avoid thread oversubscription."""
+    cv2.setNumThreads(0)
+    torch.set_num_threads(1)
+ 
+ 
+# --------------------------------------------------------------------------
+# Loading
+# --------------------------------------------------------------------------
+def load_with_torchvision(img_path):
+    """Original-style loader: returns contiguous (H, W, C) uint8 RGB numpy array."""
+    img_tensor = read_image(str(img_path), mode=ImageReadMode.RGB)
+    # ascontiguousarray avoids hidden copies in later cv2 / torch calls
+    return np.ascontiguousarray(img_tensor.permute(1, 2, 0).numpy())
+ 
+ 
+def load_resized_fast(img_path, max_size=1024, mode="smaller", interpolation=cv2.INTER_AREA):
+    """
+    Load an image and downsize it as cheaply as possible.
+ 
+    For JPEGs, PIL's draft() makes the decoder downscale during decode (by 1/2, 1/4, 1/8),
+    which is far cheaper than decoding full-res and resizing. draft() never goes below the
+    requested size, so the final cv2 resize still has enough resolution.
+ 
+    Returns: uint8 numpy array (H, W, 3), RGB.
+    """
+    with Image.open(str(img_path)) as im:
+        w, h = im.size
+        target = _target_size(h, w, max_size, mode)
+        if target is not None:
+            th, tw = target
+            im.draft("RGB", (tw, th))  # no-op for non-JPEG formats
+        arr = np.asarray(im.convert("RGB"))  # contiguous HWC uint8
+ 
+    # Final exact resize (draft only gets within a power-of-two factor)
+    h, w = arr.shape[:2]
+    target = _target_size(h, w, max_size, mode)
+    if target is not None:
+        th, tw = target
+        arr = cv2.resize(arr, (tw, th), interpolation=interpolation)
+    return arr
+ 
+ 
+# --------------------------------------------------------------------------
+# Preprocessing (drop-in replacements for the originals)
+# --------------------------------------------------------------------------
+def _preprocess(image, max_size, normalize, mode, backend, interpolation):
+    # --- cv2 path: numpy in, stay in numpy until the very end ---
+    if backend == "cv2" and isinstance(image, np.ndarray):
+        if image.ndim == 2:
+            image = image[:, :, None]
+        h, w = image.shape[:2]
+        target = _target_size(h, w, max_size, mode)
+        if target is not None:
+            th, tw = target
+            image = cv2.resize(image, (tw, th), interpolation=interpolation)
+            if image.ndim == 2:  # cv2 drops the channel dim for 1-channel input
+                image = image[:, :, None]
+        out = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1)
+        if normalize:
+            out = out.float().div_(255)  # in-place divide on the small image
+        return out
+ 
+    # --- torchvision path (tensor or numpy input) ---
     if isinstance(image, torch.Tensor):
+        _, h, w = image.shape
+    elif isinstance(image, np.ndarray):
+        image = _to_chw_tensor(image)
         _, h, w = image.shape
     else:  # PIL
         w, h = image.size
-
-    min_dim = min(h, w)
-    transform_list = []
-
-    # Resize ONLY if the *smaller* dimension is too large
-    if min_dim > max_size:
-        scale = max_size / min_dim
-        new_h = int(round(h * scale))
-        new_w = int(round(w * scale))
-        transform_list.append(
-            transforms_v2.Resize(size=[new_h, new_w], antialias=True)
-        )
-
-    # Normalize
+ 
+    target = _target_size(h, w, max_size, mode)
+    if target is not None:
+        image = F.resize(image, list(target), antialias=True)  # uint8 resize
     if normalize:
-        transform_list.append(transforms_v2.ToDtype(torch.float32, scale=True))
-
-    # Apply transforms
-    if transform_list:
-        transform = transforms_v2.Compose(transform_list)
-        resized = transform(image)
-    else:
-        resized = image
-
-    return resized
-
-def preprocess_resize_torch_transform(image, max_size=1024, normalize=True):
+        image = F.to_dtype(image, torch.float32, scale=True)   # float conversion last
+    return image
+ 
+ 
+def preprocess_resize_smallerof_wh_torch_transform(
+    image, max_size=1024, normalize=True, backend="cv2", interpolation=cv2.INTER_AREA
+):
     """
-    Resize using torchvision.transforms.v2 (most concise, PyTorch only).
-
-    Args:
-        image: torch.Tensor (C, H, W) or PIL Image
-        max_size: maximum size for the longer dimension
-        normalize: whether to normalize to [0, 1] range
-
-    Returns:
-        torch.Tensor (C, H, W) or PIL Image (same type as input)
+    Resize so the *smaller* of (H, W) is at most max_size (larger edge unconstrained).
+ 
+    backend="cv2":         fastest on CPU; numpy input stays numpy until the end.
+    backend="torchvision": antialiased bilinear, matches the original numerics.
+    Returns a torch.Tensor (C, H, W) (or PIL for PIL input on the torchvision backend).
     """
-    # Convert to tensor if numpy
-    if isinstance(image, np.ndarray):
-        image = torch.from_numpy(image)
-        if image.ndim == 3 and image.shape[2] in [1, 3]:
-            image = image.permute(2, 0, 1)
-
-    c, h, w = image.shape if isinstance(image, torch.Tensor) else (None, *image.size[::-1])
-
-    # Build transform pipeline
-    transform_list = []
-
-    # Add resize if needed
-    if h > max_size or w > max_size:
-        transform_list.append(transforms_v2.Resize(size=None, max_size=max_size, antialias=True))
-
-    # Add normalization
+    return _preprocess(image, max_size, normalize, "smaller", backend, interpolation)
+ 
+ 
+def preprocess_resize_torch_transform(
+    image, max_size=1024, normalize=True, backend="cv2", interpolation=cv2.INTER_AREA
+):
+    """Resize so the *longer* of (H, W) is at most max_size."""
+    return _preprocess(image, max_size, normalize, "longer", backend, interpolation)
+ 
+ 
+def load_and_preprocess(path, max_size=1024, normalize=True, mode="smaller",
+                        interpolation=cv2.INTER_AREA):
+    """One-call fast path: draft-decode + resize + (optional) float conversion."""
+    arr = load_resized_fast(path, max_size=max_size, mode=mode, interpolation=interpolation)
+    out = torch.from_numpy(arr).permute(2, 0, 1)
     if normalize:
-        transform_list.append(transforms_v2.ToDtype(torch.float32, scale=True))
-
-    # Apply transforms
-    if transform_list:
-        transform = transforms_v2.Compose(transform_list)
-        resized = transform(image)
-    else:
-        resized = image
-
-    return resized
+        out = out.float().div_(255)
+    return out
 
 def upscale_mask_opencv(mask, bbox, upscaled_bbox_shape):
     """Upscale using OpenCV resize with nearest neighbor."""
