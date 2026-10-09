@@ -9,7 +9,7 @@ from torchvision.io import ImageReadMode, read_image
  
 # Keep OpenCV from fighting with DataLoader workers; harmless otherwise.
 # For single-process use you can remove this or call cv2.setNumThreads(n).
-cv2.setNumThreads(0)
+cv2.setNumThreads(8)
  
  
 # --------------------------------------------------------------------------
