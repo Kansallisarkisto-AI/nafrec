@@ -271,7 +271,7 @@ def build_parser():
         help="Number of CPU pre/postprocessing workers. Default: min(physical cores, 6 * number of model workers)."
     )
     parser.add_argument(
-        "--gpu_in_flight_limit",
+        "--inference_in_flight_limit",
         type=int,
         default=16,
         help="Maximum number of GPU requests queued/in flight at once. Requests carry cropped line images, so keep this modest."
@@ -376,7 +376,7 @@ def run(input_folder, **options):
     Library entry point, equivalent to the CLI. Returns (n_ok, n_failed).
 
     Parallelism options: device ("cuda"/"cpu"), gpu_ids (list[int] or None = all
-    visible), workers_per_gpu, cpu_processes (0 = auto), gpu_in_flight_limit.
+    visible), workers_per_gpu, cpu_processes (0 = auto), inference_in_flight_limit.
     All other CLI options (detection_model_path, tile_size, ...) work the same way.
 
     Uses the "spawn" start method, so call this from under an
@@ -697,7 +697,7 @@ def run_detection(detection_model, image_path, args):
         tile_batch_size=args.tile_batch_size,
     )
 
-def gpu_classify_and_recognize(cropped_lines, line_polygons, line_confs,
+def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
                                classification_model, model_config, args):
     """Pure model work: script classification + routing to the right HTR model."""
     classification_results = classify_or_skip(cropped_lines, classification_model, model_config, args)
@@ -712,7 +712,7 @@ def gpu_classify_and_recognize(cropped_lines, line_polygons, line_confs,
     )
 
 
-def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
+def inference_worker_loop(args, device_string, inference_task_queue, inference_results):
     """
     Model worker: pins itself to one device, loads all models there, then serves
     tasks from the shared queue until it receives None.
@@ -744,7 +744,7 @@ def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
     print(f"[{device_string}] ready")
 
     while True:
-        task = gpu_task_queue.get()
+        task = inference_task_queue.get()
         try:
             if task is None:
                 return
@@ -754,41 +754,41 @@ def gpu_worker_loop(args, device_string, gpu_task_queue, gpu_results):
             if kind == "predict_polygons":
                 result = run_detection(detection_model, payload["image_path"], args)
             elif kind == "classify_and_recognize":
-                result = gpu_classify_and_recognize(
+                result = run_classify_and_recognize(
                     payload["cropped_lines"], payload["line_polygons"],
                     payload["line_confs"], classification_model, model_config, args,
                 )
             else:
                 raise ValueError(f"Unknown GPU task kind: {kind}")
 
-            gpu_results[request_id] = {"ok": True, "result": result}
+            inference_results[request_id] = {"ok": True, "result": result}
 
         except Exception:
-            gpu_results[request_id] = {"ok": False, "error": traceback.format_exc()}
+            inference_results[request_id] = {"ok": False, "error": traceback.format_exc()}
 
         finally:
-            gpu_task_queue.task_done()
+            inference_task_queue.task_done()
 
 
-_GPU_REQUEST_COUNTER = itertools.count()
+_INFERENCE_REQUEST_COUNTER = itertools.count()
 
 
-def run_gpu_task(gpu_task_queue, gpu_results, gpu_slots, kind, payload):
+def run_inference_task(inference_task_queue, inference_results, device_slots, kind, payload):
     """Submit a task to whichever model worker is free and block until its result arrives."""
-    request_id = f"{os.getpid()}-{next(_GPU_REQUEST_COUNTER)}"
+    request_id = f"{os.getpid()}-{next(_INFERENCE_REQUEST_COUNTER)}"
 
-    gpu_slots.acquire()
+    device_slots.acquire()
     try:
-        gpu_task_queue.put((kind, request_id, payload))
+        inference_task_queue.put((kind, request_id, payload))
         while True:
-            result = gpu_results.pop(request_id, None)
+            result = inference_results.pop(request_id, None)
             if result is not None:
                 if result["ok"]:
                     return result["result"]
                 raise RuntimeError(result["error"])
             time.sleep(0.05)
     finally:
-        gpu_slots.release()
+        device_slots.release()
 
 
 # ---------------------------------------------------------------------------
@@ -798,12 +798,12 @@ def run_gpu_task(gpu_task_queue, gpu_results, gpu_slots, kind, payload):
 _CPU_STATE = {}
 
 
-def init_cpu_worker(args, gpu_task_queue, gpu_results, gpu_slots):
+def init_cpu_worker(args, inference_task_queue, inference_results, device_slots):
     # We are parallelising with processes; avoid thread oversubscription.
     cv2.setNumThreads(1)
     torch.set_num_threads(1)
-    _CPU_STATE.update(args=args, queue=gpu_task_queue,
-                      results=gpu_results, slots=gpu_slots)
+    _CPU_STATE.update(args=args, queue=inference_task_queue,
+                      results=inference_results, slots=device_slots)
 
 
 def process_single_image(image_path):
@@ -817,7 +817,7 @@ def process_single_image(image_path):
 
     try:
         (line_polygons, line_confs, line_max_mins, region_polygons,
-         region_confs, region_max_mins, image_shape) = run_gpu_task(
+         region_confs, region_max_mins, image_shape) = run_inference_task(
             q, res, slots, "predict_polygons", {"image_path": image_path})
 
         line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
@@ -846,7 +846,7 @@ def process_single_image(image_path):
         cropped_lines = crop_lines(flat_polygons, image)
         del image
 
-        text_predictions, htr_model_name = run_gpu_task(
+        text_predictions, htr_model_name = run_inference_task(
             q, res, slots, "classify_and_recognize",
             {"cropped_lines": cropped_lines,
              "line_polygons": flat_polygons,
@@ -898,24 +898,24 @@ def main(args):
     physical = psutil.cpu_count(logical=False) or os.cpu_count() or 1
     if args.cpu_processes:
         cpu_processes = args.cpu_processes
-    elif devices == ["cpu"]:
-        cpu_processes = max(1, physical // 2)   # leave cores for the CPU-side model worker
+    elif devices == ["cpu"]:  # also using CPU for model inference
+        cpu_processes = max(1, physical // 2)   # leave cores for the CPU-side inference worker
     else:
         cpu_processes = max(1, min(physical, 6 * n_model_workers))
     print(f"Starting {cpu_processes} CPU workers")
 
     ctx = get_context("spawn")  # required for CUDA
     manager = ctx.Manager()
-    gpu_task_queue = manager.JoinableQueue(maxsize=args.gpu_in_flight_limit)
-    gpu_results = manager.dict()
-    gpu_slots = manager.BoundedSemaphore(args.gpu_in_flight_limit)
+    inference_task_queue = manager.JoinableQueue(maxsize=args.inference_in_flight_limit)
+    inference_results = manager.dict()
+    device_slots = manager.BoundedSemaphore(args.inference_in_flight_limit)
 
-    gpu_workers = [
-        ctx.Process(target=gpu_worker_loop,
-                    args=(args, device, gpu_task_queue, gpu_results))
+    inference_workers = [
+        ctx.Process(target=inference_worker_loop,
+                    args=(args, device, inference_task_queue, inference_results))
         for device in devices
     ]
-    for w in gpu_workers:
+    for w in inference_workers:
         w.start()
 
     n_ok = n_err = 0
@@ -923,7 +923,7 @@ def main(args):
         with ctx.Pool(
             processes=cpu_processes,
             initializer=init_cpu_worker,
-            initargs=(args, gpu_task_queue, gpu_results, gpu_slots),
+            initargs=(args, inference_task_queue, inference_results, device_slots),
         ) as pool:
             for image_path, status, msg in tqdm(
                 pool.imap_unordered(process_single_image, images, chunksize=1),
@@ -937,10 +937,10 @@ def main(args):
                     n_err += 1
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
-        for _ in gpu_workers:
-            gpu_task_queue.put(None)
-        gpu_task_queue.join()
-        for w in gpu_workers:
+        for _ in inference_workers:
+            inference_task_queue.put(None)
+        inference_task_queue.join()
+        for w in inference_workers:
             w.join()
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
