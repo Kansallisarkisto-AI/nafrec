@@ -263,7 +263,7 @@ def build_parser():
         "--workers_per_gpu",
         type=int,
         default=1,
-        help="Number of model worker processes per GPU (each holds a full copy of all models in VRAM). Increasing to 2 may speed up inference by around 25% but takes twice the VRAM."
+        help="Number of model worker processes per GPU (each holds a full copy of all models in VRAM). Increasing to 2 may speed up inference slightly but takes twice the VRAM. Generally --split_workers is better than 2 here."
     )
     parser.add_argument(
         "--cpu_processes",
@@ -281,7 +281,7 @@ def build_parser():
     parser.add_argument(
         "--split_workers",
         action="store_true",
-        help="Split mode: start two model worker processes per worker (one for detection, one for recognition/classification) so that detection and recognition run in parallel on the same device. Default: each worker does both. Takes about as much VRAM as workers_per_gpu=2 (each model is only loaded once per device, though)."
+        help="Split mode: start two model worker processes per worker (one for detection, one for recognition/classification) so that detection and recognition run in parallel on the same device. Default: each worker does both. Takes about as much VRAM as workers_per_gpu=1 (each model is only loaded once per device)."
     )
 
     parser.add_argument(

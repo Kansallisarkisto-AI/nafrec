@@ -74,7 +74,7 @@ class PaddleLayoutDetector:
         # falls back to one full-page region) ----
         self.layout = None
         if layout_model_path:
-            self.layout = _create_session(layout_model_path, providers, options, fp16)
+            self.layout = _create_session(layout_model_path, providers, options)  # ignore fp16 here due to incompatibility
             inputs = {i.name: i for i in self.layout.get_inputs()}
             self._img_name = "image" if "image" in inputs else next(
                 i.name for i in self.layout.get_inputs() if len(i.shape) == 4)
