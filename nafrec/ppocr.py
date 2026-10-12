@@ -70,8 +70,7 @@ def _get_providers_and_options(device):
                     "trt_timing_cache_path": "./trt_timingcache/",
                     "trt_engine_cache_path": "./trt_enginecache/",
                     "trt_ep_context_file_path": "./trt_epcontext/",
-                    "trt_builder_optimization_level": 3,
-                    "trt_build_heuristics_enable": True,
+                    "trt_builder_optimization_level": 2,  # level 2 enables build heuristics
                     "device_id": device_id
                 }
                 return [(name, trt_ep_options), "CPUExecutionProvider"], option
