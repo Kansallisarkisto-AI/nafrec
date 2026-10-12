@@ -64,6 +64,13 @@ def _get_providers_and_options(device):
                 trt_ep_options = {
                     "trt_fp16_enable": True,
                     "trt_engine_cache_enable": True,
+                    "trt_timing_cache_enable": True,
+                    "trt_dump_ep_context_model": True,
+                    "trt_force_timing_cache": True,
+                    "trt_timing_cache_path": "./trt_timingcache/",
+                    "trt_engine_cache_path": "./trt_enginecache/",
+                    "trt_ep_context_file_path": "./trt_epcontext/",
+                    "trt_builder_optimization_level": 0,
                     "device_id": device_id
                 }
                 return [(name, trt_ep_options), "CPUExecutionProvider"], option
