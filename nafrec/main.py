@@ -329,7 +329,7 @@ def build_parser():
         "--ppocr_width_buckets",
         type=int,
         nargs="+",
-        default=None,
+        default=[320, 640, 1024, 1536, 3200],
         help="PP-OCR: pad each batch's input width up to the smallest of these bucket widths (e.g. 320 640 1280 2560), so the model sees few distinct input shapes. Batches wider than the largest bucket keep their natural width. Default: no bucketing."
     )
     parser.add_argument(
@@ -340,7 +340,7 @@ def build_parser():
     parser.add_argument(
         "--ppocr_trt_opt_width",
         type=int,
-        default=None,
+        default=1536,
         help="PP-OCR + TensorRT: optimal input width for the shape profile. Default: median of --ppocr_width_buckets."
     )
     parser.add_argument(
