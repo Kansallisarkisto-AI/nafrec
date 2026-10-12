@@ -61,8 +61,13 @@ def _get_providers_and_options(device):
         if name in available:
             if "Tensorrt" in name:
                 print(f"[info] using TensorRT")
-                option.trt_fp16_enable = True
-                option.trt_engine_cache_enable = True
+                trt_ep_options = {
+                    "trt_fp16_enable": True,
+                    "trt_engine_cache_enable": True,
+                    "device_id": device_id
+                }
+                return [(name, trt_ep_options), "CPUExecutionProvider"], option
+            
             return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
     print("[warn] no GPU execution provider found in onnxruntime "
