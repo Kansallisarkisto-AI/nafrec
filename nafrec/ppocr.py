@@ -25,6 +25,7 @@ def _get_providers_and_options(device):
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
     Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
     import onnxruntime as ort
+    ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
     device = str(device)
     # get available providers
