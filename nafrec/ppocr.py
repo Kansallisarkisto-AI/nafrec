@@ -21,7 +21,45 @@ def _is_gpu_session(providers):
     return (first[0] if isinstance(first, tuple) else first) in GPU_PROVIDERS
 
 
-def _get_providers_and_options(device):
+MAX_REC_WIDTH = 3200  # RecPreProcess._max_w: wider lines are squeezed to this width
+
+
+def build_trt_profile(input_name, img_height, img_width_min, width_buckets, batch_size,
+                      max_width=MAX_REC_WIDTH, opt_width=None, channels=3):
+    """Build TensorRT optimization-profile shape strings for the rec model input (N, C, H, W).
+
+    The widths RecPreProcess can produce follow from the bucketing logic:
+      * no buckets: any width in [img_width_min, max_width]
+      * buckets:    batch width = smallest bucket >= natural width (natural >= img_width_min),
+                    else the natural width when it exceeds the largest bucket (capped at max_width)
+    so   min W = smallest bucket >= img_width_min (or img_width_min without buckets)
+         max W = max_width (covers batches beyond the largest bucket)
+         opt W = the bucket at the median position (or a user supplied value)
+    Batch: min 1 (single-line retry path), opt = max = batch_size.
+    Returns (input_name, (min_shapes, opt_shapes, max_shapes)) -- see apply_trt_profile().
+    """
+    buckets = sorted({int(b) for b in width_buckets}) if width_buckets else []
+    usable = [b for b in buckets if img_width_min <= b <= max_width]
+    w_min = usable[0] if usable else img_width_min
+    w_max = max(max_width, usable[-1] if usable else 0)
+    if opt_width is None:
+        opt_width = usable[len(usable) // 2] if usable else min(max(img_width_min, 640), w_max)
+    opt_width = min(max(int(opt_width), w_min), w_max)
+    mk = lambda n, w: f"{input_name}:{n}x{channels}x{img_height}x{w}"
+    return input_name, (mk(1, w_min), mk(batch_size, opt_width), mk(batch_size, w_max))
+
+
+def apply_trt_profile(trt_options, input_name, profile):
+    """Write a build_trt_profile() result into the TensorRT EP option dict."""
+    mn, opt, mx = profile
+    trt_options.update({"trt_profile_min_shapes": mn,
+                        "trt_profile_opt_shapes": opt,
+                        "trt_profile_max_shapes": mx})
+    return trt_options
+
+
+def _get_providers_and_options(device, trt_profile=None):
+    """trt_profile: optional (input_name, (min, opt, max)) from build_trt_profile; TensorRT only."""
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
     Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
     import onnxruntime as ort
@@ -73,6 +111,8 @@ def _get_providers_and_options(device):
                     "trt_builder_optimization_level": 2,  # level 2 enables build heuristics
                     "device_id": device_id
                 }
+                if trt_profile is not None:
+                    apply_trt_profile(trt_ep_options, *trt_profile)
                 return [(name, trt_ep_options), "CPUExecutionProvider"], option
             
             return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
@@ -101,16 +141,27 @@ def _create_session(model_path, providers, options=None, fp16=False):
     return ort.InferenceSession(model_path, providers=providers, sess_options=options)
 
 
+def _onnx_input_name(model_path):
+    import onnx
+    m = onnx.load(model_path, load_external_data=False)
+    return m.graph.input[0].name
+
+
 class PPOCRRecognizer:
     """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
 
     def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                 width_buckets=None):
+                 width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
-        providers, options = _get_providers_and_options(device)
+        trt_profile = None
+        if trt_dynamic_shapes and str(device).startswith("cuda"):
+            trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
+                                            width_buckets, batch_size, opt_width=trt_opt_width)
+            print(f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
+        providers, options = _get_providers_and_options(device, trt_profile)
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
@@ -177,8 +228,9 @@ class PPOCRRecognizer:
 
 
 def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                     width_buckets=None):
-    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets)
+                     width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None):
+    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets,
+                           batch_size, trt_dynamic_shapes, trt_opt_width)
 
 
 def get_ppocr_preds(data, recognizer):
