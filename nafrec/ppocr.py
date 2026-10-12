@@ -70,12 +70,12 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False):
     available = ort.get_available_providers()
     option = ort.SessionOptions()
 
+    # log errors only
+    option.log_severity_level = 3
+
     # If CPU-only
     if not device.startswith("cuda"):
         # Special settings for CPU providers
-
-        option.log_severity_level = 3
-
         option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         option.intra_op_num_threads = max(1, os.cpu_count())
