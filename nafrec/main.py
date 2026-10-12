@@ -249,7 +249,7 @@ def build_parser():
     parser.add_argument(
         "--tile_batch_size",
         type=int,
-        default=6,
+        default=3,
         help="Batch size for SAHI. 6 is a reasonable value."
     )
     parser.add_argument(

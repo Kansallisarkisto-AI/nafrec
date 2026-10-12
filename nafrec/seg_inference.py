@@ -491,7 +491,7 @@ def predict_masks(model,
         # As a result, the final slices in the row and column dimensions might be smaller than the specified slice dimensions,
         # if the image's width or height is not a multiple of the slice's width or height minus the overlap.
         #slicer = InferenceSlicer(tiling_callback, slice_wh=tile_size, overlap_wh=tile_overlap, iou_threshold=tile_iou_threshold, overlap_metric=OverlapMetric.IOU, overlap_filter=OverlapFilter.NON_MAX_SUPPRESSION, batch_size=tile_batch_size)
-        slicer = InferenceSlicer(callback=tiling_callback, slice_wh=(tile_size, tile_size), overlap_wh=(tile_overlap, tile_overlap), iou_threshold=tile_iou_threshold, compact_masks=True)
+        slicer = InferenceSlicer(callback=tiling_callback, slice_wh=(tile_size, tile_size), overlap_wh=(tile_overlap, tile_overlap), iou_threshold=tile_iou_threshold, compact_masks=True, batch_size=tile_batch_size)
         detections = slicer(preprocessed_image)
     else:  # process as whole image without tiling
         # load with torchvision
