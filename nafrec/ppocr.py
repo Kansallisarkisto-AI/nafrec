@@ -58,7 +58,7 @@ def apply_trt_profile(trt_options, input_name, profile):
     return trt_options
 
 
-def _get_providers_and_options(device, trt_profile=None):
+def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False):
     """trt_profile: optional (input_name, (min, opt, max)) from build_trt_profile; TensorRT only."""
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
     Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
@@ -97,7 +97,7 @@ def _get_providers_and_options(device, trt_profile=None):
 
     for name in GPU_PROVIDERS:
         if name in available:
-            if "Tensorrt" in name:
+            if name == "TensorrtExecutionProvider" and enable_tensorrt:
                 print(f"[info] using TensorRT")
                 trt_ep_options = {
                     "trt_fp16_enable": True,
@@ -151,17 +151,17 @@ class PPOCRRecognizer:
     """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
 
     def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                 width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None):
+                 width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
         trt_profile = None
-        if trt_dynamic_shapes and str(device).startswith("cuda"):
+        if enable_tensorrt and trt_dynamic_shapes and str(device).startswith("cuda"):
             trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
                                             width_buckets, batch_size, opt_width=trt_opt_width)
             print(f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
-        providers, options = _get_providers_and_options(device, trt_profile)
+        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt)
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
@@ -228,9 +228,9 @@ class PPOCRRecognizer:
 
 
 def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                     width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None):
+                     width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False):
     return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets,
-                           batch_size, trt_dynamic_shapes, trt_opt_width)
+                           batch_size, trt_dynamic_shapes, trt_opt_width, enable_tensorrt)
 
 
 def get_ppocr_preds(data, recognizer):

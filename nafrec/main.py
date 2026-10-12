@@ -333,6 +333,11 @@ def build_parser():
         help="PP-OCR: pad each batch's input width up to the smallest of these bucket widths (e.g. 320 640 1280 2560), so the model sees few distinct input shapes. Batches wider than the largest bucket keep their natural width. Default: no bucketing."
     )
     parser.add_argument(
+        "--enable_tensorrt",
+        action="store_true",
+        help="Use the TensorRT execution provider if available (off by default; GPUs then use CUDA/ROCm/MIGraphX)."
+    )
+    parser.add_argument(
         "--no_trt_dynamic_shapes",
         action="store_true",
         help="PP-OCR + TensorRT: don't pass min/opt/max shape profiles to the TensorRT EP (it then rebuilds engines whenever a new input shape appears)."
@@ -658,6 +663,7 @@ def load_latin_recognizer(args, device):
             batch_size=args.ppocr_batch_size,
             trt_dynamic_shapes=not args.no_trt_dynamic_shapes,
             trt_opt_width=args.ppocr_trt_opt_width,
+            enable_tensorrt=args.enable_tensorrt,
         )
         return model, None
     return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)
