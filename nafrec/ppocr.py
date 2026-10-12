@@ -70,7 +70,7 @@ def _get_providers_and_options(device):
                     "trt_timing_cache_path": "./trt_timingcache/",
                     "trt_engine_cache_path": "./trt_enginecache/",
                     "trt_ep_context_file_path": "./trt_epcontext/",
-                    "trt_builder_optimization_level": 3,
+                    "trt_builder_optimization_level": 0,
                     "trt_build_heuristics_enable": 1,
                     "device_id": device_id
                 }
