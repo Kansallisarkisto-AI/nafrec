@@ -97,25 +97,26 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False):
 
     for name in GPU_PROVIDERS:
         if name in available:
-            if name == "TensorrtExecutionProvider" and enable_tensorrt:
-                print(f"[info] using TensorRT")
-                trt_ep_options = {
-                    "trt_fp16_enable": True,
-                    "trt_engine_cache_enable": True,
-                    "trt_timing_cache_enable": True,
-                    "trt_dump_ep_context_model": True,
-                    "trt_force_timing_cache": True,
-                    "trt_timing_cache_path": "./trt_timingcache/",
-                    "trt_engine_cache_path": "./trt_enginecache/",
-                    "trt_ep_context_file_path": "./trt_epcontext/",
-                    "trt_builder_optimization_level": 5,  # level 2 enables build heuristics
-                    "device_id": device_id
-                }
-                if trt_profile is not None:
-                    apply_trt_profile(trt_ep_options, *trt_profile)
-                return [(name, trt_ep_options), "CPUExecutionProvider"], option
-            
-            return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
+            if name == "TensorrtExecutionProvider":
+                if enable_tensorrt:
+                    print(f"[info] using TensorRT")
+                    trt_ep_options = {
+                        "trt_fp16_enable": True,
+                        "trt_engine_cache_enable": True,
+                        "trt_timing_cache_enable": True,
+                        "trt_dump_ep_context_model": True,
+                        "trt_force_timing_cache": True,
+                        "trt_timing_cache_path": "./trt_timingcache/",
+                        "trt_engine_cache_path": "./trt_enginecache/",
+                        "trt_ep_context_file_path": "./trt_epcontext/",
+                        "trt_builder_optimization_level": 5,  # level 2 enables build heuristics
+                        "device_id": device_id
+                    }
+                    if trt_profile is not None:
+                        apply_trt_profile(trt_ep_options, *trt_profile)
+                    return [(name, trt_ep_options), "CPUExecutionProvider"], option
+            else:
+                return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
     print("[warn] no GPU execution provider found in onnxruntime "
           f"(available: {available}) -- PP-OCR will run on CPU")
