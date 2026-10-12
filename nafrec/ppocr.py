@@ -61,10 +61,7 @@ def _get_providers_and_options(device):
         if name in available:
             if "Tensorrt" in name:
                 print(f"[info] using TensorRT")
-                # when using TensorRT, we also have to return CUDA EP in case of any nodes that don't support TensorRT
-                return [(name, {"device_id": device_id}), ("CUDAExecutionProvider", {"device_id": device_id}), "CPUExecutionProvider"], option
-            else:
-                return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
+            return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
     print("[warn] no GPU execution provider found in onnxruntime "
           f"(available: {available}) -- PP-OCR will run on CPU")
