@@ -3,7 +3,7 @@ Library wrapper around the existing NAFRec pipeline in main.py.
 
 Starts the model (inference) workers and the CPU pre/postprocessing pool once,
 then accepts image processing requests until closed. All the actual work is done
-by the existing functions in main.py (inference_worker_loop, init_cpu_worker,
+by the existing functions in main.py (start_inference_workers, init_cpu_worker,
 predict_single_image), so predictions are identical to the CLI. Nothing is
 written to disk: each request returns the internal (preds, xml_input) pair that
 xml_output.get_xml (and utils.save_json_output) take.
@@ -28,7 +28,8 @@ from multiprocessing import get_context
 import psutil
 
 from .main import (make_args, validate_args, resolve_devices,
-                   inference_worker_loop, init_cpu_worker, predict_single_image)
+                   start_inference_workers, stop_inference_workers,
+                   init_cpu_worker, predict_single_image)
 
 
 def _predict(image_path):
@@ -60,21 +61,16 @@ class NAFRec:
 
         ctx = get_context("spawn")  # required for CUDA
         self._manager = ctx.Manager()
-        self._queue = self._manager.JoinableQueue(maxsize=self.args.inference_in_flight_limit)
+        self._queues = {role: self._manager.JoinableQueue(maxsize=self.args.inference_in_flight_limit)
+                        for role in ("det", "rec")}
         self._results = self._manager.dict()
         self._slots = self._manager.BoundedSemaphore(self.args.inference_in_flight_limit)
 
-        self._workers = [
-            ctx.Process(target=inference_worker_loop,
-                        args=(self.args, device, self._queue, self._results))
-            for device in self.devices
-        ]
-        for w in self._workers:
-            w.start()
+        self._workers = start_inference_workers(ctx, self.args, self.devices, self._queues, self._results)
         self._pool = ctx.Pool(
             processes=cpu_processes,
             initializer=init_cpu_worker,  # init_cpu_worker will set the correct queues in _CPU_STATE
-            initargs=(self.args, self._queue, self._results, self._slots),
+            initargs=(self.args, self._queues, self._results, self._slots),
         )
         self._closed = False
 
@@ -111,11 +107,7 @@ class NAFRec:
         self._closed = True
         self._pool.close()
         self._pool.join()
-        for _ in self._workers:
-            self._queue.put(None)
-        self._queue.join()
-        for w in self._workers:
-            w.join()
+        stop_inference_workers(self.args, self.devices, self._workers, self._queues)
         self._manager.shutdown()
 
     def __enter__(self):

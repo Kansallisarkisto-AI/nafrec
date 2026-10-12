@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel
 import itertools
+import queue
 import traceback
 import cv2
 import psutil
@@ -275,6 +276,12 @@ def build_parser():
         type=int,
         default=16,
         help="Maximum number of GPU requests queued/in flight at once. Requests carry cropped line images, so keep this modest."
+    )
+
+    parser.add_argument(
+        "--split_workers",
+        action="store_true",
+        help="Split mode: start two model worker processes per worker (one for detection, one for recognition/classification) so that detection and recognition run in parallel on the same device. Default: each worker does both. Takes about as much VRAM as workers_per_gpu=2 (each model is only loaded once per device, though)."
     )
 
     # PP-OCRv6 args
@@ -728,39 +735,89 @@ def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
     )
 
 
-def inference_worker_loop(args, device_string, inference_task_queue, inference_results):
+# Task kind -> queue it goes to. Detection tasks and recognition tasks have separate queues.
+TASK_QUEUE = {"predict_polygons": "det", "classify_and_recognize": "rec"}
+
+
+def worker_specs(args, devices):
     """
-    Model worker: pins itself to one device, loads all models there, then serves
-    tasks from the shared queue until it receives None.
+    (device, roles) for each model worker process. Roles are the queues the process
+    takes tasks from. Standard mode: one process per device serving both queues.
+    Split mode: a detection and a recognition process per device.
+    """
+    if args.split_workers:
+        return [(d, (r,)) for d in devices for r in ("det", "rec")]
+    return [(d, ("rec", "det")) for d in devices]  # recognition first: finishes pages already in progress
+
+
+def start_inference_workers(ctx, args, devices, queues, inference_results):
+    workers = [
+        ctx.Process(target=inference_worker_loop,
+                    args=(args, device, queues, inference_results, roles))
+        for device, roles in worker_specs(args, devices)
+    ]
+    for w in workers:
+        w.start()
+    return workers
+
+
+def stop_inference_workers(args, devices, workers, queues):
+    for _, roles in worker_specs(args, devices):
+        queues[roles[0]].put(None)  # one stop signal per worker, in a queue it reads
+    for q in queues.values():
+        q.join()
+    for w in workers:
+        w.join()
+
+
+def next_task(queues, roles):
+    """Block until a task (or the None stop signal) is available in any of the role queues; returns (role, task)."""
+    while True:
+        for role in roles:
+            try:
+                return role, queues[role].get_nowait()
+            except queue.Empty:
+                pass
+        time.sleep(0.005)
+
+
+def inference_worker_loop(args, device_string, queues, inference_results, roles=("rec", "det")):
+    """
+    Model worker: pins itself to one device, loads the models needed for its roles
+    ("det" and/or "rec"), then serves tasks from the queues of those roles until it
+    receives None.
     """
     if device_string.startswith("cuda"):
         torch.cuda.set_device(torch.device(device_string))
 
-    print(f"[{device_string}] loading models...")
-    detection_model = load_detection_model(args, device_string)
-    recognition_model = processor = None
-    if latin_enabled(args):
-        recognition_model, processor = load_latin_recognizer(args, device_string)
+    print(f"[{device_string}] loading models ({'+'.join(roles)})...")
+    detection_model = recognition_model = processor = None
+    cyrillic_recognition_model = cyrillic_processor = classification_model = model_config = None
 
-    cyrillic_recognition_model = cyrillic_processor = None
-    if cyrillic_enabled(args):
-        cyrillic_recognition_model, cyrillic_processor = load_trocr_model(
-            args.cyrillic_recognition_model_path,
-            args.cyrillic_processor_path,
-            device_string,
-        )
+    if "det" in roles:
+        detection_model = load_detection_model(args, device_string)
 
-    classification_model = None
-    if classification_enabled(args):
-        classification_model = load_classification_model(
-            args.script_classification_model_path, device_string)
+    if "rec" in roles:
+        if latin_enabled(args):
+            recognition_model, processor = load_latin_recognizer(args, device_string)
 
-    model_config = build_model_config(
-        recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
+        if cyrillic_enabled(args):
+            cyrillic_recognition_model, cyrillic_processor = load_trocr_model(
+                args.cyrillic_recognition_model_path,
+                args.cyrillic_processor_path,
+                device_string,
+            )
+
+        if classification_enabled(args):
+            classification_model = load_classification_model(
+                args.script_classification_model_path, device_string)
+
+        model_config = build_model_config(
+            recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
     print(f"[{device_string}] ready")
 
     while True:
-        task = inference_task_queue.get()
+        role, task = next_task(queues, roles)
         try:
             if task is None:
                 return
@@ -783,19 +840,19 @@ def inference_worker_loop(args, device_string, inference_task_queue, inference_r
             inference_results[request_id] = {"ok": False, "error": traceback.format_exc()}
 
         finally:
-            inference_task_queue.task_done()
+            queues[role].task_done()
 
 
 _INFERENCE_REQUEST_COUNTER = itertools.count()
 
 
-def run_inference_task(inference_task_queue, inference_results, device_slots, kind, payload):
-    """Submit a task to whichever model worker is free and block until its result arrives."""
+def run_inference_task(queues, inference_results, device_slots, kind, payload):
+    """Submit a task to the queue for its kind and block until a model worker has produced the result."""
     request_id = f"{os.getpid()}-{next(_INFERENCE_REQUEST_COUNTER)}"
 
     device_slots.acquire()
     try:
-        inference_task_queue.put((kind, request_id, payload))
+        queues[TASK_QUEUE[kind]].put((kind, request_id, payload))
         while True:
             result = inference_results.pop(request_id, None)
             if result is not None:
@@ -814,11 +871,11 @@ def run_inference_task(inference_task_queue, inference_results, device_slots, ki
 _CPU_STATE = {}
 
 
-def init_cpu_worker(args, inference_task_queue, inference_results, device_slots):
+def init_cpu_worker(args, queues, inference_results, device_slots):
     # We are parallelising with processes; avoid thread oversubscription.
     cv2.setNumThreads(1)
     torch.set_num_threads(1)
-    _CPU_STATE.update(args=args, queue=inference_task_queue,
+    _CPU_STATE.update(args=args, queues=queues,
                       results=inference_results, slots=device_slots)
 
 
@@ -831,7 +888,7 @@ def predict_single_image(image_path):
     when there was nothing to output.
     """
     args = _CPU_STATE["args"]
-    q, res, slots = _CPU_STATE["queue"], _CPU_STATE["results"], _CPU_STATE["slots"]
+    q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
 
     detection_result = run_inference_task(
         q, res, slots, "predict_polygons", {"image_path": image_path})
@@ -916,7 +973,7 @@ def process_single_image(image_path):
 def main(args):
     validate_args(args)
     devices = resolve_devices(args)
-    print(f"Model workers: {devices}")
+    print(f"Model workers: {devices}" + (" (split: detection + recognition process each)" if args.split_workers else ""))
 
     print('Find images in folder', str(args.input_folder))
     images = load_image_paths(args.input_folder)
@@ -936,24 +993,18 @@ def main(args):
 
     ctx = get_context("spawn")  # required for CUDA
     manager = ctx.Manager()
-    inference_task_queue = manager.JoinableQueue(maxsize=args.inference_in_flight_limit)
+    queues = {role: manager.JoinableQueue(maxsize=args.inference_in_flight_limit) for role in ("det", "rec")}
     inference_results = manager.dict()
     device_slots = manager.BoundedSemaphore(args.inference_in_flight_limit)
 
-    inference_workers = [
-        ctx.Process(target=inference_worker_loop,
-                    args=(args, device, inference_task_queue, inference_results))
-        for device in devices
-    ]
-    for w in inference_workers:
-        w.start()
+    inference_workers = start_inference_workers(ctx, args, devices, queues, inference_results)
 
     n_ok = n_err = 0
     try:
         with ctx.Pool(
             processes=cpu_processes,
             initializer=init_cpu_worker,
-            initargs=(args, inference_task_queue, inference_results, device_slots),
+            initargs=(args, queues, inference_results, device_slots),
         ) as pool:
             for image_path, status, msg in tqdm(
                 pool.imap_unordered(process_single_image, images, chunksize=1),
@@ -967,11 +1018,7 @@ def main(args):
                     n_err += 1
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
-        for _ in inference_workers:
-            inference_task_queue.put(None)
-        inference_task_queue.join()
-        for w in inference_workers:
-            w.join()
+        stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
     return n_ok, n_err
