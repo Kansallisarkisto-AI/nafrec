@@ -86,7 +86,8 @@ def _create_session(model_path, providers, options=None, fp16=False):
 class PPOCRRecognizer:
     """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
 
-    def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False):
+    def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
+                 width_buckets=None):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
@@ -95,7 +96,7 @@ class PPOCRRecognizer:
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
-        self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min))
+        self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min), width_buckets=width_buckets)
         self.post = CTCLabelDecode(char_dict_path)
 
         # PaddleOCR appends a trailing space class when Global.use_space_char=true
@@ -157,8 +158,9 @@ class PPOCRRecognizer:
         return scores, texts
 
 
-def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False):
-    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16)
+def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
+                     width_buckets=None):
+    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets)
 
 
 def get_ppocr_preds(data, recognizer):

@@ -326,6 +326,13 @@ def build_parser():
         help="PP-OCR minimum input width (scalable)"
     )
     parser.add_argument(
+        "--ppocr_width_buckets",
+        type=int,
+        nargs="+",
+        default=None,
+        help="PP-OCR: pad each batch's input width up to the smallest of these bucket widths (e.g. 320 640 1280 2560), so the model sees few distinct input shapes. Batches wider than the largest bucket keep their natural width. Default: no bucketing."
+    )
+    parser.add_argument(
         "--ppocr_batch_size",
         type=int,
         default=32,
@@ -636,6 +643,7 @@ def load_latin_recognizer(args, device):
             img_height=args.ppocr_img_height,
             img_width_min=args.ppocr_img_width_min,
             fp16=args.fp16_rec,
+            width_buckets=args.ppocr_width_buckets,
         )
         return model, None
     return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)
