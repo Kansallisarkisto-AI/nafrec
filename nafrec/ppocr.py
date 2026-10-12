@@ -9,6 +9,17 @@ import cv2
 import os
 
 
+GPU_PROVIDERS = ("CUDAExecutionProvider",        # NVIDIA
+                 "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
+                 "ROCMExecutionProvider")        # AMD, ORT <= 1.22 (legacy)
+
+
+def _is_gpu_session(providers):
+    """True if the primary provider (str or (name, options) tuple) is a GPU one."""
+    first = providers[0]
+    return (first[0] if isinstance(first, tuple) else first) in GPU_PROVIDERS
+
+
 def _get_providers_and_options(device):
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
     Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
@@ -44,9 +55,7 @@ def _get_providers_and_options(device):
 
     device_id = int(device.split(":")[1]) if ":" in device else 0
 
-    for name in ("CUDAExecutionProvider",        # NVIDIA
-                 "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
-                 "ROCMExecutionProvider"):       # AMD, ORT <= 1.22 (legacy)
+    for name in GPU_PROVIDERS:
         if name in available:
             return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
@@ -57,17 +66,33 @@ def _get_providers_and_options(device):
     return ["CPUExecutionProvider"], option
 
 
+def _create_session(model_path, providers, options=None, fp16=False):
+    """InferenceSession; with fp16 and a GPU provider (CUDA / ROCm / MIGraphX) the
+    model is converted to fp16 in memory (the .onnx file is untouched). Inputs and
+    outputs stay fp32, so callers don't change. On CPU, fp16 is ignored."""
+    import onnxruntime as ort
+
+    if fp16 and _is_gpu_session(providers):
+        import onnx
+        from onnxconverter_common import float16
+
+        model = float16.convert_float_to_float16(onnx.load(model_path), keep_io_types=True)
+        return ort.InferenceSession(model.SerializeToString(), providers=providers, sess_options=options)
+    if fp16:
+        print(f"[info] fp16 ignored for {os.path.basename(model_path)}: not running on a GPU")
+    return ort.InferenceSession(model_path, providers=providers, sess_options=options)
+
+
 class PPOCRRecognizer:
     """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
 
-    def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320):
+    def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
-        import onnxruntime as ort
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
         providers, options = _get_providers_and_options(device)
-        self.session = ort.InferenceSession(model_path, providers=providers, sess_options=options)
+        self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
         self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min))
@@ -132,8 +157,8 @@ class PPOCRRecognizer:
         return scores, texts
 
 
-def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320):
-    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min)
+def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False):
+    return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16)
 
 
 def get_ppocr_preds(data, recognizer):

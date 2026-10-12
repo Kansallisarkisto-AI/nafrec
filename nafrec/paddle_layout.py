@@ -18,7 +18,7 @@ tuples, and image_shape = (height, width), all in original-image pixel coordinat
 import numpy as np
 import cv2
 
-from .ppocr import _get_providers_and_options
+from .ppocr import _get_providers_and_options, _create_session
 
 DEFAULT_LAYOUT_SIZE = 800  # PP-DocLayout-L / plus-L input size
 
@@ -49,6 +49,7 @@ class PaddleLayoutDetector:
         det_model_path,
         device="cpu",
         *,
+        fp16=False,
         layout_threshold=0.3,
         layout_input_size=0,
         layout_mean=(0.0, 0.0, 0.0),
@@ -65,7 +66,6 @@ class PaddleLayoutDetector:
     ):
         # Lazy imports so nafrec works without onnxruntime / ppocrv6_onnx
         # when this detector isn't used.
-        import onnxruntime as ort
         from ppocrv6_onnx import DetPreProcess, DBPostProcess
 
         providers, options = _get_providers_and_options(device)
@@ -74,7 +74,7 @@ class PaddleLayoutDetector:
         # falls back to one full-page region) ----
         self.layout = None
         if layout_model_path:
-            self.layout = ort.InferenceSession(layout_model_path, providers=providers, sess_options=options)
+            self.layout = _create_session(layout_model_path, providers, options, fp16)
             inputs = {i.name: i for i in self.layout.get_inputs()}
             self._img_name = "image" if "image" in inputs else next(
                 i.name for i in self.layout.get_inputs() if len(i.shape) == 4)
@@ -111,7 +111,7 @@ class PaddleLayoutDetector:
                     f"label list ({layout_labels_path or 'built-in PP-DocLayout_plus-L'}): {labels}")
 
         # ---- DB text line detection model ----
-        self.det = ort.InferenceSession(det_model_path, providers=providers)
+        self.det = _create_session(det_model_path, providers, fp16=fp16)
         self._det_input = self.det.get_inputs()[0].name
         self._det_pre = DetPreProcess(
             limit_side_len=det_limit_side_len,

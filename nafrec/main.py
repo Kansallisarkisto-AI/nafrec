@@ -284,6 +284,17 @@ def build_parser():
         help="Split mode: start two model worker processes per worker (one for detection, one for recognition/classification) so that detection and recognition run in parallel on the same device. Default: each worker does both. Takes about as much VRAM as workers_per_gpu=2 (each model is only loaded once per device, though)."
     )
 
+    parser.add_argument(
+        "--fp16_rec",
+        action="store_true",
+        help="Run the recognition models (TrOCR, PP-OCR) in fp16. PP-OCR ONNX models are converted in memory at load time. Only applies on GPUs (CUDA/ROCm); ignored on CPU."
+    )
+    parser.add_argument(
+        "--fp16_det",
+        action="store_true",
+        help="Run the detection/segmentation models (RF-DETR, Paddle layout + text detection) in fp16. Paddle ONNX models are converted in memory at load time. Only applies on GPUs (CUDA/ROCm); ignored on CPU."
+    )
+
     # PP-OCRv6 args
     parser.add_argument(
         "--use_ppocr",
@@ -624,9 +635,10 @@ def load_latin_recognizer(args, device):
             device=device,
             img_height=args.ppocr_img_height,
             img_width_min=args.ppocr_img_width_min,
+            fp16=args.fp16_rec,
         )
         return model, None
-    return load_trocr_model(args.recognition_model_path, args.processor_path, device)
+    return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)
 
 # ---------------------------------------------------------------------------
 # Device selection
@@ -663,6 +675,7 @@ def load_detection_model(args, device):
             args.paddle_layout_model_path,
             args.paddle_det_model_path,
             device,
+            fp16=args.fp16_det,
             layout_threshold=args.paddle_layout_threshold,
             layout_input_size=args.paddle_layout_input_size,
             layout_mean=tuple(args.paddle_layout_mean),
@@ -681,6 +694,7 @@ def load_detection_model(args, device):
         args.detection_model_path,
         device=device,
         batch_size=args.tile_batch_size if args.tile_size else 1,
+        fp16=args.fp16_det,
     )
 
 def run_detection(detection_model, image_path, args):
@@ -806,6 +820,7 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
                 args.cyrillic_recognition_model_path,
                 args.cyrillic_processor_path,
                 device_string,
+                fp16=args.fp16_rec,
             )
 
         if classification_enabled(args):

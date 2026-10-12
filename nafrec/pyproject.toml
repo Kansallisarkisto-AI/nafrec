@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nafrec"
+version = "0.2.0"
+description = "An HTR and OCR pipeline for historical text recognition, which optionally classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.14.2",
+    "langdetect>=1.0.9",
+    "lxml>=6.0.2",
+    "marimo>=0.17.6",
+    "numpy>=1.24.3",
+    "opencv-python-headless>=4.8.1.78",
+    "pillow>=9.5.0",
+    "pydantic>=2.6.1",
+    "rfdetr>=1.11.2",
+    "shapely>=2.0.6",
+    "psutil>=5.9",
+    "tqdm",
+    "torch>=2.4.0",
+    "transformers==5.10.4",
+    "optimum==2.3.0",
+    "yattag>=1.16.1",
+    "supervision==0.29.1",
+    "huggingface-hub>=1.19.0",
+    "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
+]
+
+authors = [
+  {name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi"},
+  {name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi"},
+  {name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi"},
+]
+maintainers = [
+  {name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi"},
+  {name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi"},
+  {name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi"}
+]
+license = "Apache-2.0"
+license-files = ["LICEN[CS]E.*"]
+keywords = ["document understanding", "handwriting recognition", "ocr", "htr"]
+classifiers = [
+  "Programming Language :: Python"
+]
+
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.18"]
+cpu-openvino = ["onnxruntime-openvino>=1.18"]
+gpu = ["onnxruntime-gpu>=1.18", "onnxconverter-common>=1.14", "onnx"]
+
+[project.urls]
+Homepage = "https://github.com/Kansallisarkisto-AI/nafrec"
+Documentation = "https://github.com/Kansallisarkisto-AI/nafrec"
+Repository = "https://github.com/Kansallisarkisto-AI/nafrec"
+"Bug Tracker" = "https://github.com/Kansallisarkisto-AI/nafrec/issues"
+
+[project.scripts]
+nafrec = "nafrec:main.entrypoint"
+
+# Don't try to satisfy both extras at once (they provide the same module).
+[tool.uv]
+conflicts = [
+    [{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }],
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true

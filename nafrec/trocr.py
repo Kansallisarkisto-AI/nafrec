@@ -14,7 +14,7 @@ class TrOCRProcessorCustom(TrOCRProcessor):
         self.current_processor = self.image_processor
         self.chat_template = None
 
-def load_trocr_model(model_path, processor_path, device='cuda', revision="main"):
+def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False):
     """
     Load a TrOCR model with custom image size support and positional encoding interpolation.
 
@@ -31,7 +31,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main")
             - model (VisionEncoderDecoderModel): Loaded TrOCR model on the specified device.
     """
     resolved_device = device or DEVICE
-    use_fp16 = torch.device(resolved_device).type == "cuda"
+    use_fp16 = fp16 and torch.device(resolved_device).type == "cuda"
     model_dtype = torch.float16 if use_fp16 else torch.float32
     # Store original
     original_embeddings_forward = ViTEmbeddings.forward

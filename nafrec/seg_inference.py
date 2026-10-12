@@ -360,7 +360,7 @@ def mask_to_polygon_cv2(mask, original_shape):
         scaled_polygons.append(scaled_poly)
     return scaled_polygons, np.array(area_percentages)
 
-def load_rfdetr_model(model_path, device="cuda", batch_size=1):
+def load_rfdetr_model(model_path, device="cuda", batch_size=1, fp16=False):
     """
     Load and optimize an RFDETR segmentation model for inference.
 
@@ -375,7 +375,7 @@ def load_rfdetr_model(model_path, device="cuda", batch_size=1):
     if device == "cpu":
         model.inference(batch_size=batch_size)
     else:
-        model.inference(compile_backend="torchscript", batch_size=batch_size, dtype="float16")
+        model.inference(compile_backend="torchscript", batch_size=batch_size, dtype="float16" if fp16 else "float32")
     return model
 
 def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
