@@ -58,10 +58,55 @@ def apply_trt_profile(trt_options, input_name, profile):
     return trt_options
 
 
-def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False):
-    """trt_profile: optional (input_name, (min, opt, max)) from build_trt_profile; TensorRT only."""
+def format_trt_profile(shapes):
+    """Build a (min, opt, max) TensorRT profile string triple for one or more inputs.
+
+    shapes: {input_name: (min_dims, opt_dims, max_dims)}, each *_dims a tuple of ints.
+    The TensorRT EP wants every *dynamic* input of the model in the profile
+    ("a:1x3x32x32,b:1x2"), so multi-input models (e.g. PP-DocLayout) pass all of them.
+    Returns (list_of_input_names, (min_shapes, opt_shapes, max_shapes)) -- same layout
+    as build_trt_profile(), so it can be handed straight to apply_trt_profile().
+    """
+    parts = ([], [], [])
+    for name, triple in shapes.items():
+        for acc, dims in zip(parts, triple):
+            acc.append(f"{name}:" + "x".join(str(int(d)) for d in dims))
+    return list(shapes), tuple(",".join(p) for p in parts)
+
+
+def onnx_input_specs(model_path):
+    """[(name, dims)] for every graph input of an ONNX file (weights are not loaded).
+    A dim is an int when static, otherwise None (symbolic name or unknown)."""
+    import onnx
+    m = onnx.load(model_path, load_external_data=False)
+    initializers = {i.name for i in m.graph.initializer}   # old exporters list weights as inputs too
+    specs = []
+    for inp in m.graph.input:
+        if inp.name in initializers:
+            continue
+        dims = [d.dim_value if d.HasField("dim_value") else None
+                for d in inp.type.tensor_type.shape.dim]
+        specs.append((inp.name, dims))
+    return specs
+
+
+def _prepare_cache_dir(base, subdir):
+    """Cache path for one model: base/subdir/ (created), or plain base/ when subdir is None."""
+    path = os.path.join(base, subdir) if subdir else base
+    os.makedirs(path, exist_ok=True)
+    return path.rstrip("/") + "/"
+
+
+def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, trt_cache_subdir=None,
+                               label=None):
     """Map a torch-style device string ('cuda', 'cuda:1', 'cpu') to ORT providers.
-    Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU"."""
+    Note: torch uses 'cuda' for ROCm builds too, so 'cuda' here means "the GPU".
+
+    trt_profile: optional (input_names, (min, opt, max)) from a build_trt_*profile function; TensorRT only.
+    trt_cache_subdir: keep this model's TensorRT engine / EP-context files in a subfolder of the
+        shared cache folders, so several models (det, layout, rec) never write the same file.
+    label: model name for log messages.
+    """
     import onnxruntime as ort
     ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
@@ -99,22 +144,25 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False):
         if name in available:
             if name == "TensorrtExecutionProvider":
                 if enable_tensorrt:
-                    print(f"[info] using TensorRT")
+                    print(f"[info] using TensorRT" + (f" for {label}" if label else ""))
                     trt_ep_options = {
-                        "trt_fp16_enable": True,
+                        "trt_fp16_enable": True if label == "ppocrv6" else False,
                         "trt_engine_cache_enable": True,
                         "trt_timing_cache_enable": True,
                         "trt_dump_ep_context_model": True,
                         "trt_force_timing_cache": True,
-                        "trt_timing_cache_path": "./trt_timingcache/",
-                        "trt_engine_cache_path": "./trt_enginecache/",
-                        "trt_ep_context_file_path": "./trt_epcontext/",
-                        "trt_builder_optimization_level": 5,  # level 2 enables build heuristics
+                        # the timing cache is keyed by GPU/TensorRT version, not by model: shared on purpose
+                        "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
+                        "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
+                        "trt_ep_context_file_path": './',
+                        "trt_builder_optimization_level": 5,  # level 2 and lower would replace measurements with heuristics
                         "device_id": device_id
                     }
                     if trt_profile is not None:
                         apply_trt_profile(trt_ep_options, *trt_profile)
-                    return [(name, trt_ep_options), "CPUExecutionProvider"], option
+
+                    # when using TensorRT, we also have to return the CUDA fallback
+                    return [(name, trt_ep_options), ("CUDAExecutionProvider", {"device_id": device_id}), "CPUExecutionProvider"], option
             else:
                 return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
@@ -162,7 +210,7 @@ class PPOCRRecognizer:
             trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
                                             width_buckets, batch_size, opt_width=trt_opt_width)
             print(f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
-        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt)
+        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt, label="ppocrv6")
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 

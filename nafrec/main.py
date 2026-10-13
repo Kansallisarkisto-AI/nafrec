@@ -336,12 +336,12 @@ def build_parser():
     parser.add_argument(
         "--enable_tensorrt",
         action="store_true",
-        help="Use the TensorRT execution provider if available (off by default; GPUs then use CUDA/ROCm/MIGraphX)."
+        help="Use the TensorRT execution provider if available (off by default; GPUs then use CUDA/ROCm/MIGraphX). Applies to the PP-OCR recognition model and to the Paddle layout + text detection models. Engines are cached in ./trt_enginecache (per model), so the first run builds them and is slow."
     )
     parser.add_argument(
         "--no_trt_dynamic_shapes",
         action="store_true",
-        help="PP-OCR + TensorRT: don't pass min/opt/max shape profiles to the TensorRT EP (it then rebuilds engines whenever a new input shape appears)."
+        help="TensorRT: don't pass min/opt/max shape profiles to the TensorRT EP for PP-OCR / Paddle models (it then rebuilds engines whenever a new input shape appears, which for the Paddle text detector means for nearly every page size)."
     )
     parser.add_argument(
         "--ppocr_trt_opt_width",
@@ -394,6 +394,8 @@ def build_parser():
                         help="DB minimum box score (also used as the line confidence)")
     parser.add_argument("--paddle_det_unclip_ratio", type=float, default=1.5,
                         help="DB box expansion ratio")
+    parser.add_argument("--paddle_det_trt_opt_shape", type=int, nargs=2, metavar=("H", "W"), default=None,
+                        help="Paddle text detection + TensorRT: optimal input size (height width) for the shape profile, e.g. 1536 1152. Default: a 3:4 portrait page at the --paddle_det_limit_side_len resize limit. The profile's min/max sizes are derived from the det resize settings automatically.")
 
     return parser
 
@@ -718,6 +720,9 @@ def load_detection_model(args, device):
             det_thresh=args.paddle_det_thresh,
             det_box_thresh=args.paddle_det_box_thresh,
             det_unclip_ratio=args.paddle_det_unclip_ratio,
+            enable_tensorrt=args.enable_tensorrt,
+            trt_dynamic_shapes=not args.no_trt_dynamic_shapes,
+            det_trt_opt_shape=tuple(args.paddle_det_trt_opt_shape) if args.paddle_det_trt_opt_shape else None,
         )
     return load_rfdetr_model(
         args.detection_model_path,
@@ -1067,7 +1072,8 @@ def main(args):
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
         # len-1 because we don't consider the first image
-        print(f"Images/s: {(len(images) - 1) / (time.time()- start_time)}")
+        if start_time is not None:
+            print(f"Images/s: {(len(images) - 1) / (time.time()- start_time)}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')

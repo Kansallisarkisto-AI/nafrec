@@ -18,9 +18,11 @@ tuples, and image_shape = (height, width), all in original-image pixel coordinat
 import numpy as np
 import cv2
 
-from .ppocr import _get_providers_and_options, _create_session
+from .ppocr import (_get_providers_and_options, _create_session, apply_trt_profile,
+                    format_trt_profile, onnx_input_specs)
 
 DEFAULT_LAYOUT_SIZE = 800  # PP-DocLayout-L / plus-L input size
+DET_STRIDE = 32            # DetPreProcess rounds both sides to a multiple of this
 
 # With some help for PP-DocLayout_plus-L implementation from
 # https://huggingface.co/cimo001/paddle/tree/main/PP-DocLayout_plus-L/src
@@ -40,6 +42,111 @@ def _static_hw(shape):
     if len(shape) == 4 and isinstance(shape[2], int) and isinstance(shape[3], int):
         return shape[2], shape[3]
     return None
+
+
+def _pick_image_input(inputs):
+    """Name of the image tensor among [(name, shape)] model inputs."""
+    names = [n for n, _ in inputs]
+    return "image" if "image" in names else next(n for n, shape in inputs if len(shape) == 4)
+
+
+def _resolve_layout_hw(shape, layout_input_size, warn=True):
+    """(H, W) the layout model is fed: its static size, else layout_input_size / the default."""
+    hw = _static_hw(shape)
+    if hw is None:
+        size = layout_input_size or DEFAULT_LAYOUT_SIZE
+        return size, size
+    if warn and layout_input_size and (layout_input_size, layout_input_size) != hw:
+        print(f"[warn] layout_input_size={layout_input_size} ignored: "
+              f"model has a fixed input size {hw}")
+    return hw
+
+
+# ---------------------------------------------------------------------------
+# TensorRT optimization profiles (dynamic shapes)
+# ---------------------------------------------------------------------------
+def _round_side(v):
+    """Same rounding DetPreProcess applies to each side: nearest multiple of 32, at least 32."""
+    return max(int(round(v / DET_STRIDE)) * DET_STRIDE, DET_STRIDE)
+
+
+def det_side_bounds(limit_side_len, limit_type, max_side_limit):
+    """(min_side, max_side) covering both H and W of every tensor DetPreProcess can produce.
+
+    DetPreProcess scales the page so its longest ('max') / shortest ('min') side matches
+    limit_side_len, clamps the longest side to max_side_limit, then rounds each side to a
+    multiple of 32. Hence:
+      * 'max': both sides <= min(limit_side_len, max_side_limit)
+      * 'min': the long side is only bounded by max_side_limit
+      * either side can be as small as 32 (tiny / extreme-aspect-ratio images)
+    The rounding is monotonic, so rounding the bound gives the exact upper limit.
+    """
+    cap = min(limit_side_len, max_side_limit) if limit_type == "max" else max_side_limit
+    return DET_STRIDE, _round_side(cap)
+
+
+def default_det_opt_shape(limit_side_len, limit_type, max_side_limit):
+    """Typical (H, W) of a portrait page: the shape TensorRT tunes its kernels for."""
+    _, hi = det_side_bounds(limit_side_len, limit_type, max_side_limit)
+    if limit_type == "max":
+        long_side = hi
+        short_side = _round_side(0.75 * hi)
+    else:
+        short_side = min(_round_side(limit_side_len), hi)
+        long_side = min(_round_side(limit_side_len * 4 / 3), hi)
+    return long_side, short_side
+
+
+def build_trt_det_profile(input_spec, limit_side_len, limit_type, max_side_limit, opt_shape=None):
+    """TensorRT profile for the DB text detection model, input (1, C, H, W) with H, W dynamic.
+
+    input_spec: (name, dims) from onnx_input_specs(); dims are ints (static) or None (dynamic).
+    opt_shape: optional (H, W) to tune for; default = a portrait page at the resize limit.
+    Batch is always 1 (one page per call). Returns None when the model has no dynamic dims
+    (nothing to declare), else (input_names, (min, opt, max)) for apply_trt_profile().
+    """
+    name, dims = input_spec
+    if len(dims) != 4:
+        raise ValueError(f"det input '{name}' has rank {len(dims)}, expected 4 (N, C, H, W)")
+    if all(d is not None for d in dims):
+        return None
+
+    lo, hi = det_side_bounds(limit_side_len, limit_type, max_side_limit)
+    opt_h, opt_w = opt_shape if opt_shape else default_det_opt_shape(limit_side_len, limit_type, max_side_limit)
+    opt_h, opt_w = (min(max(_round_side(v), lo), hi) for v in (opt_h, opt_w))
+
+    def shape(h, w):
+        # static dims stay as in the model; dynamic ones: batch 1, 3 channels, H, W
+        return tuple(d if d is not None else (1, 3, h, w)[axis] for axis, d in enumerate(dims))
+
+    triple = (shape(lo, lo), shape(opt_h, opt_w), shape(hi, hi))
+    return format_trt_profile({name: triple})
+
+
+def build_trt_layout_profile(input_specs, in_h, in_w):
+    """TensorRT profile for the layout model: every dynamic input pinned to what nafrec feeds it.
+
+    nafrec always runs the layout model with batch 1 at a single resolution (in_h x in_w), so
+    min = opt = max. The TensorRT EP needs *every* dynamic input in the profile, and Paddle
+    exports typically have a symbolic batch dim on `image`, `im_shape` and `scale_factor`.
+    input_specs: [(name, dims)] from onnx_input_specs(). Returns None when nothing is dynamic.
+    """
+    shapes = {}
+    for name, dims in input_specs:
+        if all(d is not None for d in dims):
+            continue
+        fixed = []
+        for axis, d in enumerate(dims):
+            if d is not None:
+                fixed.append(d)
+            elif axis == 0:
+                fixed.append(1)
+            elif len(dims) == 4 and axis in (1, 2, 3):
+                fixed.append((3, in_h, in_w)[axis - 1])
+            else:
+                raise ValueError(f"cannot infer dynamic dimension {axis} of layout input '{name}' {dims}")
+        shapes[name] = (tuple(fixed),) * 3
+    return format_trt_profile(shapes) if shapes else None
 
 
 class PaddleLayoutDetector:
@@ -63,31 +170,34 @@ class PaddleLayoutDetector:
         det_thresh=0.3,
         det_box_thresh=0.6,
         det_unclip_ratio=1.5,
+        enable_tensorrt=False,
+        trt_dynamic_shapes=True,
+        det_trt_opt_shape=None,
     ):
         # Lazy imports so nafrec works without onnxruntime / ppocrv6_onnx
         # when this detector isn't used.
         from ppocrv6_onnx import DetPreProcess, DBPostProcess
 
-        providers, options = _get_providers_and_options(device)
+        # TensorRT: per-model providers because each model gets its own shape profile and
+        # cache folder. Without a profile the TensorRT EP rebuilds an engine for every new
+        # input shape, so dynamic shapes matter (see build_trt_*_profile).
+        use_trt_profiles = enable_tensorrt and trt_dynamic_shapes and str(device).startswith("cuda")
 
         # ---- layout model (optional: without it there are no regions and nafrec
         # falls back to one full-page region) ----
         self.layout = None
         if layout_model_path:
+            layout_profile = None
+            if use_trt_profiles:
+                layout_profile = self._layout_trt_profile(layout_model_path, layout_input_size)
+            providers, options = _get_providers_and_options(
+                device, layout_profile, enable_tensorrt, trt_cache_subdir="layout", label="layout model")
             self.layout = _create_session(layout_model_path, providers, options)  # ignore fp16 here due to incompatibility
             inputs = {i.name: i for i in self.layout.get_inputs()}
-            self._img_name = "image" if "image" in inputs else next(
-                i.name for i in self.layout.get_inputs() if len(i.shape) == 4)
+            self._img_name = _pick_image_input([(n, i.shape) for n, i in inputs.items()])
             self._has_im_shape = "im_shape" in inputs
             self._has_scale_factor = "scale_factor" in inputs
-            hw = _static_hw(inputs[self._img_name].shape)
-            if hw is None:
-                size = layout_input_size or DEFAULT_LAYOUT_SIZE
-                hw = (size, size)
-            elif layout_input_size and (layout_input_size, layout_input_size) != hw:
-                print(f"[warn] layout_input_size={layout_input_size} ignored: "
-                      f"model has a fixed input size {hw}")
-            self._in_h, self._in_w = hw
+            self._in_h, self._in_w = _resolve_layout_hw(inputs[self._img_name].shape, layout_input_size)
         self._mean = np.asarray(layout_mean, dtype=np.float32)
         self._std = np.asarray(layout_std, dtype=np.float32)
         self.layout_threshold = layout_threshold
@@ -111,7 +221,13 @@ class PaddleLayoutDetector:
                     f"label list ({layout_labels_path or 'built-in PP-DocLayout_plus-L'}): {labels}")
 
         # ---- DB text line detection model ----
-        self.det = _create_session(det_model_path, providers, fp16=fp16)
+        det_profile = None
+        if use_trt_profiles:
+            det_profile = self._det_trt_profile(det_model_path, det_limit_side_len, det_limit_type,
+                                                det_max_side_limit, det_trt_opt_shape)
+        det_providers, _ = _get_providers_and_options(
+            device, det_profile, enable_tensorrt, trt_cache_subdir="det", label="text detection model")
+        self.det = _create_session(det_model_path, det_providers)  # ignore fp16 here due to incompatibility
         self._det_input = self.det.get_inputs()[0].name
         self._det_pre = DetPreProcess(
             limit_side_len=det_limit_side_len,
@@ -125,6 +241,37 @@ class PaddleLayoutDetector:
         )
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _layout_trt_profile(model_path, layout_input_size):
+        """Shape profile for the layout model, or None (with a warning) if it can't be built."""
+        try:
+            specs = onnx_input_specs(model_path)
+            img_shape = dict(specs)[_pick_image_input(specs)]
+            in_h, in_w = _resolve_layout_hw(img_shape, layout_input_size, warn=False)
+            profile = build_trt_layout_profile(specs, in_h, in_w)
+        except Exception as e:
+            print(f"[warn] could not build a TensorRT shape profile for the layout model ({e}) -- "
+                  "TensorRT will rebuild its engine if the input shape changes")
+            return None
+        if profile is not None:
+            print(f"[info] TensorRT layout profile: {profile[1][1]}")
+        return profile
+
+    @staticmethod
+    def _det_trt_profile(model_path, limit_side_len, limit_type, max_side_limit, opt_shape):
+        """Shape profile for the text detection model, or None (with a warning) if it can't be built."""
+        try:
+            profile = build_trt_det_profile(onnx_input_specs(model_path)[0], limit_side_len,
+                                            limit_type, max_side_limit, opt_shape)
+        except Exception as e:
+            print(f"[warn] could not build a TensorRT shape profile for the text detection model ({e}) -- "
+                  "TensorRT will rebuild its engine for every new page size")
+            return None
+        if profile is not None:
+            mn, opt, mx = profile[1]
+            print(f"[info] TensorRT det profile: min={mn} opt={opt} max={mx}")
+        return profile
+
     def _detect_regions(self, img_bgr):
         """Returns list of (class_id, score, x1, y1, x2, y2) in original image pixels."""
         if self.layout is None:
