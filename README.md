@@ -108,6 +108,7 @@ nafrec \
 | `--region_iou` | float | 0.3 | Threshold value for merging regions based on intersection over union (IoU) (applies to both detectors) |
 | `--line_overlap_threshold` | float | 0.5 | Threshold value for merging lines based on overlapping area (applies to both detectors) |
 | `--region_overlap_threshold` | float | 0.5 | Threshold value for merging regions based on overlapping area (applies to both detectors) |
+| `--sliver_threshold` | float | 0.01 | Given as a proportion of the smaller dimension of the image, so 0.01 would be 1% of the shorter side. Text lines thinner than this threshold will be discarded. |
 
 ### Example
 ```bash
