@@ -12,6 +12,7 @@ import traceback
 import cv2
 import psutil
 from multiprocessing import get_context
+import time
 
 # Import PyTorch and prevent useless warning
 import warnings
@@ -1043,6 +1044,8 @@ def main(args):
     inference_workers = start_inference_workers(ctx, args, devices, queues, inference_results)
 
     n_ok = n_err = 0
+
+    start_time = None
     try:
         with ctx.Pool(
             processes=cpu_processes,
@@ -1055,12 +1058,16 @@ def main(args):
             ):
                 if status == "ok":
                     n_ok += 1
+                    if start_time is None:
+                        start_time = time.time()
                 elif status == "info":
                     tqdm.write(f"[info] {image_path}: {msg}")
                 else:
                     n_err += 1
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
+        # len-1 because we don't consider the first image
+        print(f"Images/s: {(start_time - time.time()) / (len(images) - 1)}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
