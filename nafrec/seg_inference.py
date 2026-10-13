@@ -372,7 +372,7 @@ def load_rfdetr_model(model_path, device="cuda", batch_size=1, fp16=False):
     if device == "cpu":
         model.inference(batch_size=batch_size)
     else:
-        model.inference(compile_backend="torchscript", batch_size=batch_size, dtype="float16" if fp16 else "float32")
+        model.inference(compile_backend="cudagraph", batch_size=batch_size, dtype="float16" if fp16 else "float32")
     return model
 
 def postprocess_polygons(polygons, confs, area_percentages, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True, sliver_threshold=0.01):
