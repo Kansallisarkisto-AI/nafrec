@@ -1,4 +1,4 @@
-from .image_processing import load_with_torchvision, preprocess_resize_torch_transform, preprocess_resize_smallerof_wh_torch_transform
+from .image_processing import load_resize_torch_transform, load_resize_smallerof_wh_torch_transform
 from rfdetr import RFDETRSeg2XLarge
 import supervision as sv
 import numpy as np
@@ -466,10 +466,9 @@ def predict_masks(model,
             - image_shape (tuple): Original image dimensions (height, width).
     """
     if tile_size > 0:  # process image as tiles
-        # load with Pillow, because InferenceSlicer expects PIL images
-        image = Image.open(image_path).convert('RGB')
-        # downscale for time savings, only resizes smaller dimension of (width, height) for arbitrarily long documents
-        preprocessed_image = preprocess_resize_smallerof_wh_torch_transform(image, max_size=max_size)
+        # load with Pillow (InferenceSlicer expects PIL images) and downscale for time savings in one step
+        # (JPEGs are partially decoded). Only the smaller dimension of (width, height) is limited, for arbitrarily long documents
+        preprocessed_image, image_shape = load_resize_smallerof_wh_torch_transform(image_path, max_size=max_size)
 
         if tile_batch_size < 2:
             def tiling_callback(tile):
@@ -494,10 +493,8 @@ def predict_masks(model,
         slicer = InferenceSlicer(callback=tiling_callback, slice_wh=(tile_size, tile_size), overlap_wh=(tile_overlap, tile_overlap), iou_threshold=tile_iou_threshold, compact_masks=True, batch_size=tile_batch_size)
         detections = slicer(preprocessed_image)
     else:  # process as whole image without tiling
-        # load with torchvision
-        image = load_with_torchvision(image_path)
-        # downscale for VRAM savings, resizes the larger dimension of (width, height)
-        preprocessed_image = preprocess_resize_torch_transform(image, max_size=max_size)
+        # load and downscale for VRAM savings in one step (JPEGs are partially decoded), limits the larger dimension of (width, height)
+        preprocessed_image, image_shape = load_resize_torch_transform(image_path, max_size=max_size)
         #predict
         detections = model.predict(preprocessed_image, threshold=confidence_threshold)
 
@@ -508,12 +505,7 @@ def predict_masks(model,
     region_mask = detections.mask[detections.class_id == 1]
     region_confs = detections.confidence[detections.class_id == 1]
 
-    # extract H, W
-    if tile_size > 0:  # loaded with Pillow
-        w, h = image.size
-        image_shape = (h, w)
-    else:  # loaded with torchvision
-        image_shape = (image.shape[0], image.shape[1])
+    # image_shape is the original (H, W), returned by the loader above
 
     # Plain numpy arrays, so the result is cheap to pickle to the CPU workers
     line_mask = np.asarray(line_mask, dtype=bool)

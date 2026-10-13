@@ -3,6 +3,8 @@ import numpy as np
 from torchvision.transforms import v2 as transforms_v2
 import torch
 import cv2
+import warnings
+from PIL import Image
 
 def load_with_torchvision(img_path):
     """
@@ -109,6 +111,119 @@ def preprocess_resize_torch_transform(image, max_size=1024, normalize=True):
         resized = image
 
     return resized
+
+def _open_jpeg_or_none(img_path):
+    """Open `img_path` lazily with Pillow and return the image if it is a JPEG, else None.
+
+    Only the header is parsed here, no pixel data is decoded yet.
+    Anything Pillow cannot open (or refuses as a decompression bomb) returns None so the
+    caller falls back to the regular loading path.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            im = Image.open(img_path)
+    except (OSError, Image.DecompressionBombError):
+        return None
+    if im.format != "JPEG":
+        im.close()
+        return None
+    return im
+
+
+def _draft_resize_jpeg(im, new_w, new_h):
+    """Decode an opened JPEG at reduced size (DCT scaling via `Image.draft`), then resize
+    to exactly (new_w, new_h) and return an RGB PIL image.
+
+    `draft` makes the decoder scale by 1/2, 1/4 or 1/8 while decoding, picking the largest
+    reduction that still leaves the image >= the requested size, so the final antialiased
+    resize works from (at most ~2x) larger data instead of the full-resolution image.
+    """
+    im.draft("RGB", (new_w, new_h))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        im = im.convert("RGB")
+    if im.size != (new_w, new_h):
+        im = im.resize((new_w, new_h), Image.BILINEAR)  # Pillow's BILINEAR is antialiased
+    return im
+
+
+def load_resize_smallerof_wh_torch_transform(img_path, max_size=1024):
+    """
+    Drop-in, faster replacement for
+    ``Image.open(path).convert('RGB')`` + ``preprocess_resize_smallerof_wh_torch_transform``.
+
+    Resizes so that the *smaller* of (width, height) is at most max_size (the larger
+    dimension may grow arbitrarily). For JPEGs the resize is combined with decoding using
+    Pillow's ``draft`` (partial decode), which is much faster than full decode + resize.
+    Other formats (and JPEGs Pillow can't open) use the existing code path.
+
+    Args:
+        img_path (str or Path): Path to the image file
+        max_size: maximum size for the *smaller* dimension
+
+    Returns:
+        tuple: (PIL.Image in RGB, (orig_h, orig_w)) -- the original, pre-resize size is
+        returned because callers need it after the image has been downscaled.
+    """
+    im = _open_jpeg_or_none(img_path)
+    if im is None:  # non-JPEG fallback
+        image = Image.open(img_path).convert('RGB')
+        w, h = image.size
+        return preprocess_resize_smallerof_wh_torch_transform(image, max_size=max_size), (h, w)
+
+    w, h = im.size
+    min_dim = min(h, w)
+    if min_dim > max_size:
+        scale = max_size / min_dim
+        new_h = int(round(h * scale))
+        new_w = int(round(w * scale))
+        out = _draft_resize_jpeg(im, new_w, new_h)
+    else:
+        out = im.convert("RGB")
+    return out, (h, w)
+
+
+def load_resize_torch_transform(img_path, max_size=1024, normalize=True):
+    """
+    Drop-in, faster replacement for
+    ``load_with_torchvision`` + ``preprocess_resize_torch_transform``.
+
+    Resizes so that the *longer* of (width, height) is at most max_size. For JPEGs the
+    resize is combined with decoding using Pillow's ``draft`` (partial decode). Other
+    formats (and JPEGs Pillow can't open) use the existing code path.
+
+    Args:
+        img_path (str or Path): Path to the image file
+        max_size: maximum size for the longer dimension
+        normalize: whether to convert to float32 in [0, 1]
+
+    Returns:
+        tuple: (torch.Tensor (C, H, W), (orig_h, orig_w)) -- the original, pre-resize size
+        is returned because callers need it after the image has been downscaled.
+    """
+    im = _open_jpeg_or_none(img_path)
+    if im is None:  # non-JPEG fallback
+        image = load_with_torchvision(img_path)
+        shape = (image.shape[0], image.shape[1])
+        return preprocess_resize_torch_transform(image, max_size=max_size, normalize=normalize), shape
+
+    w, h = im.size
+    if h > max_size or w > max_size:
+        # same output size rule as transforms_v2.Resize(size=None, max_size=max_size)
+        if w >= h:
+            new_w, new_h = max_size, max(1, int(max_size * h / w))
+        else:
+            new_w, new_h = max(1, int(max_size * w / h)), max_size
+        out = _draft_resize_jpeg(im, new_w, new_h)
+    else:
+        out = im.convert("RGB")
+
+    tensor = torch.from_numpy(np.asarray(out)).permute(2, 0, 1).contiguous()  # uint8 (C, H, W)
+    if normalize:
+        tensor = tensor.to(torch.float32).div_(255.0)
+    return tensor, (h, w)
+
 
 def upscale_mask_opencv(mask, bbox, upscaled_bbox_shape):
     """Upscale using OpenCV resize with nearest neighbor."""

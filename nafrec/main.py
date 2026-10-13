@@ -1067,7 +1067,7 @@ def main(args):
                     tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
     finally:
         # len-1 because we don't consider the first image
-        print(f"Images/s: {(len(images) - 1) / (time.time()- start_time)}")
+        print(f"Images/s: {(len(images) - 1) / (time.time() - start_time)}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
