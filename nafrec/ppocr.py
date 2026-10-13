@@ -160,7 +160,9 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                     }
                     if trt_profile is not None:
                         apply_trt_profile(trt_ep_options, *trt_profile)
-                    return [(name, trt_ep_options), "CPUExecutionProvider"], option
+
+                    # when using TensorRT, we also have to return the CUDA fallback
+                    return [(name, trt_ep_options), ("CUDAExecutionProvider", {"device_id": device_id}), "CPUExecutionProvider"], option
             else:
                 return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
 
