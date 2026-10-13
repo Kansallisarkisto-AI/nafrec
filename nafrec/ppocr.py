@@ -146,7 +146,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                 if enable_tensorrt:
                     print(f"[info] using TensorRT" + (f" for {label}" if label else ""))
                     trt_ep_options = {
-                        "trt_fp16_enable": True,
+                        "trt_fp16_enable": True if label == "ppocrv6" else False,
                         "trt_engine_cache_enable": True,
                         "trt_timing_cache_enable": True,
                         "trt_dump_ep_context_model": True,
@@ -155,7 +155,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                         "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
                         "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
                         #"trt_ep_context_file_path": _prepare_cache_dir("./trt_epcontext", trt_cache_subdir),
-                        "trt_builder_optimization_level": 5,  # level 2 enables build heuristics
+                        "trt_builder_optimization_level": 5,  # level 2 and lower would replace measurements with heuristics
                         "device_id": device_id
                     }
                     if trt_profile is not None:
@@ -210,7 +210,7 @@ class PPOCRRecognizer:
             trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
                                             width_buckets, batch_size, opt_width=trt_opt_width)
             print(f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
-        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt)
+        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt, label="ppocrv6")
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
