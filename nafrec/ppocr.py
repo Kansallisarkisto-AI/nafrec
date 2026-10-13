@@ -154,7 +154,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                         # the timing cache is keyed by GPU/TensorRT version, not by model: shared on purpose
                         "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
                         "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
-                        #"trt_ep_context_file_path": _prepare_cache_dir("./trt_epcontext", trt_cache_subdir),
+                        "trt_ep_context_file_path": trt_cache_subdir + '_epcontext',
                         "trt_builder_optimization_level": 5,  # level 2 and lower would replace measurements with heuristics
                         "device_id": device_id
                     }
