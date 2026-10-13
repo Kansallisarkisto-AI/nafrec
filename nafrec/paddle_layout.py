@@ -381,7 +381,8 @@ class PaddleLayoutDetector:
                          line_iou=0.3,
                          region_iou=0.3,
                          line_overlap_threshold=0.5,
-                         region_overlap_threshold=0.5):
+                         region_overlap_threshold=0.5,
+                         sliver_threshold=0.01):
         """
         Convenience wrapper doing both steps in the calling process: `predict_raw` followed by
         seg_inference.raw_polygons_to_polygons. Same arguments and return value as
@@ -397,7 +398,8 @@ class PaddleLayoutDetector:
             region_percentage_threshold=region_percentage_threshold,
             line_iou=line_iou, region_iou=region_iou,
             line_overlap_threshold=line_overlap_threshold,
-            region_overlap_threshold=region_overlap_threshold)
+            region_overlap_threshold=region_overlap_threshold,
+            sliver_threshold=sliver_threshold)
 
 
 def load_paddle_layout_model(layout_model_path, det_model_path, device="cpu", **kwargs):

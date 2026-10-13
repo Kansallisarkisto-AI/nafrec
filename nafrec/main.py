@@ -224,6 +224,12 @@ def build_parser():
         help="Threshold value for merging overlapping regions"
     )
     parser.add_argument(
+        "--sliver_threshold",
+        type=float,
+        default=0.01,
+        help="Threshold value for discarding slivers (proportion of smaller image dimension). Applies to lines only."
+    )
+    parser.add_argument(
         "--tile_size",
         type=int,
         default=0,
@@ -762,6 +768,7 @@ def postprocess_detection(detection_result, args):
         region_iou=args.region_iou,
         line_overlap_threshold=args.line_overlap_threshold,
         region_overlap_threshold=args.region_overlap_threshold,
+        sliver_threshold=args.sliver_threshold,
     )
     convert = raw_polygons_to_polygons if args.detector == "paddle" else masks_to_polygons
     return convert(*detection_result, **thresholds)

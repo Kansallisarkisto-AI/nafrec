@@ -375,7 +375,7 @@ def load_rfdetr_model(model_path, device="cuda", batch_size=1, fp16=False):
         model.inference(compile_backend="torchscript", batch_size=batch_size, dtype="float16" if fp16 else "float32")
     return model
 
-def postprocess_polygons(polygons, confs, area_percentages, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
+def postprocess_polygons(polygons, confs, area_percentages, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True, sliver_threshold=0.01):
     """
     Shared polygon post-processing, independent of where the polygons came from (segmentation masks or
     a box/quad detector): drops polygons that are too small, merges overlapping polygons, and (for lines)
@@ -413,7 +413,7 @@ def postprocess_polygons(polygons, confs, area_percentages, image_shape, percent
     # drop polygons that are too thin (slivers)
     if use_verticality:
         merged_polygons, merged_confs = filter_slivers(
-            merged_polygons, confs=merged_confs, threshold=0.01*min(image_shape[0], image_shape[1]),
+            merged_polygons, confs=merged_confs, threshold=sliver_threshold*min(image_shape[0], image_shape[1]),
         )
 
     merged_max_mins = []
@@ -424,7 +424,7 @@ def postprocess_polygons(polygons, confs, area_percentages, image_shape, percent
 
     return merged_polygons, merged_confs, merged_max_mins
 
-def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
+def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True, sliver_threshold=0.01):
     """
     Get polygons from segmentation masks, merge overlapping polygons and drop outlier polygons that are too thin.
 
@@ -454,9 +454,9 @@ def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, o
 
     return postprocess_polygons(
         all_polygons, new_confs, area_percentages, image_shape,
-        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality)
+        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality, sliver_threshold=sliver_threshold)
 
-def process_raw_polygons(polygons, confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
+def process_raw_polygons(polygons, confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True, sliver_threshold=0.01):
     """
     Same as `process_polygons`, but for detectors that output polygons / boxes directly instead of
     segmentation masks (e.g. the Paddle DB text line detector and the PP-DocLayout region boxes).
@@ -478,7 +478,7 @@ def process_raw_polygons(polygons, confs, image_shape, percentage_threshold, ove
     area_percentages = np.array([calculate_polygon_area(p) / image_area if len(p) >= 3 else 0.0 for p in polygons])
     return postprocess_polygons(
         polygons, list(confs), area_percentages, image_shape,
-        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality)
+        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality, sliver_threshold=sliver_threshold)
 
 def predict_masks(model, 
                      image_path, 
@@ -581,7 +581,8 @@ def masks_to_polygons(line_mask,
                       line_iou=0.3,
                       region_iou=0.3,
                       line_overlap_threshold=0.5,
-                      region_overlap_threshold=0.5):
+                      region_overlap_threshold=0.5,
+                      sliver_threshold=0.01):
     """
     CPU post-processing for the output of `predict_masks`: converts line and region masks to
     polygons, merges overlapping ones and drops outliers (see `process_polygons`).
@@ -598,11 +599,11 @@ def masks_to_polygons(line_mask,
     """
     merged_line_polygons, merged_line_confs, merged_line_max_mins = process_polygons(
         line_mask, line_confs, image_shape,
-        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True)
+        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True, sliver_threshold=sliver_threshold)
 
     merged_region_polygons, merged_region_confs, merged_region_max_mins = process_polygons(
         region_mask, region_confs, image_shape,
-        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False)
+        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False, sliver_threshold=sliver_threshold)
 
     return merged_line_polygons, merged_line_confs, merged_line_max_mins, merged_region_polygons, merged_region_confs, merged_region_max_mins, image_shape
 
@@ -617,7 +618,8 @@ def raw_polygons_to_polygons(line_polygons,
                              line_iou=0.3,
                              region_iou=0.3,
                              line_overlap_threshold=0.5,
-                             region_overlap_threshold=0.5):
+                             region_overlap_threshold=0.5,
+                             sliver_threshold=0.01):
     """
     CPU post-processing for detectors that return polygons / boxes directly (e.g. the Paddle backend,
     see `PaddleLayoutDetector.predict_raw`). Counterpart of `masks_to_polygons`: applies the same
@@ -629,11 +631,11 @@ def raw_polygons_to_polygons(line_polygons,
     """
     merged_line_polygons, merged_line_confs, merged_line_max_mins = process_raw_polygons(
         line_polygons, line_confs, image_shape,
-        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True)
+        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True, sliver_threshold=sliver_threshold)
 
     merged_region_polygons, merged_region_confs, merged_region_max_mins = process_raw_polygons(
         region_polygons, region_confs, image_shape,
-        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False)
+        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False, sliver_threshold=sliver_threshold)
 
     return merged_line_polygons, merged_line_confs, merged_line_max_mins, merged_region_polygons, merged_region_confs, merged_region_max_mins, image_shape
 
@@ -645,6 +647,7 @@ def predict_polygons(model, image_path,
                      region_iou=0.3,
                      line_overlap_threshold=0.5,
                      region_overlap_threshold=0.5,
+                     sliver_threshold=0.01,
                      **predict_kwargs):
     """
     Convenience wrapper doing both steps in the calling process: `predict_masks` followed by
@@ -663,4 +666,5 @@ def predict_polygons(model, image_path,
         region_percentage_threshold=region_percentage_threshold,
         line_iou=line_iou, region_iou=region_iou,
         line_overlap_threshold=line_overlap_threshold,
-        region_overlap_threshold=region_overlap_threshold)
+        region_overlap_threshold=region_overlap_threshold,
+        sliver_threshold=sliver_threshold)
