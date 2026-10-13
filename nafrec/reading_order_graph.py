@@ -67,10 +67,12 @@ class GraphBasedOrdering:
         
         # Vertical overlap threshold
         v_overlap = min(u_feat['y_max'], v_feat['y_max']) - max(u_feat['y_min'], v_feat['y_min'])
-        avg_height = (u_feat['height'] + v_feat['height']) / 2
+
+        # use minimum rather than average as reference height for vertical overlap
+        reference_height = min(u_feat['height'], v_feat['height'])
         
         # If significant vertical overlap, use horizontal order
-        if v_overlap > 0.5 * avg_height:
+        if v_overlap > 0.5 * reference_height:
             if self.text_direction == 'lr':
                 return u_anchor[0] < v_anchor[0]
             else:
