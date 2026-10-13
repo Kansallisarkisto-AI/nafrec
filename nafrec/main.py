@@ -26,7 +26,7 @@ import torch
 from .xml_output import save_xml
 from .trocr import get_text_preds, load_trocr_model
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
-from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons
+from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons, raw_polygons_to_polygons
 from .paddle_layout import load_paddle_layout_model
 from .image_processing import load_with_torchvision, crop_lines
 from .script_classifier import load_classification_model, classify_lines
@@ -191,13 +191,13 @@ def build_parser():
         "--line_percentage_threshold",
         type=float,
         default=7e-05,
-        help="Threshold value for filtering out small line polygons"
+        help="Threshold value for filtering out small line polygons (fraction of image area; both detectors)"
     )
     parser.add_argument(
         "--region_percentage_threshold",
         type=float,
         default=7e-05,
-        help="Threshold value for filtering out small region polygons"
+        help="Threshold value for filtering out small region polygons (fraction of image area; both detectors)"
     )
     parser.add_argument(
         "--line_iou",
@@ -735,13 +735,12 @@ def run_detection(detection_model, image_path, args):
     """
     Model-worker part of segmentation.
 
-    rfdetr: returns the raw masks (see seg_inference.predict_masks); the polygon
-    post-processing happens in the CPU worker (see postprocess_detection).
-    paddle: the backend already returns the final 7-tuple (see
-    seg_inference.masks_to_polygons), so there is nothing left to post-process.
+    rfdetr: returns the raw masks (see seg_inference.predict_masks).
+    paddle: returns the raw line / region polygons (see PaddleLayoutDetector.predict_raw).
+    In both cases the polygon post-processing happens in the CPU worker (see postprocess_detection).
     """
     if args.detector == "paddle":
-        return detection_model.predict_polygons(image_path)
+        return detection_model.predict_raw(image_path)
     return predict_masks(
         detection_model,
         image_path,
@@ -754,12 +753,9 @@ def run_detection(detection_model, image_path, args):
     )
 
 def postprocess_detection(detection_result, args):
-    """CPU-worker part of segmentation: raw masks -> merged line/region polygons (the 7-tuple)."""
-    if args.detector == "paddle":
-        return detection_result
-    line_mask, line_confs, region_mask, region_confs, image_shape = detection_result
-    return masks_to_polygons(
-        line_mask, line_confs, region_mask, region_confs, image_shape,
+    """CPU-worker part of segmentation: raw masks / polygons -> merged line/region polygons (the 7-tuple)."""
+    # same filtering / merging thresholds for both backends
+    thresholds = dict(
         line_percentage_threshold=args.line_percentage_threshold,
         region_percentage_threshold=args.region_percentage_threshold,
         line_iou=args.line_iou,
@@ -767,6 +763,8 @@ def postprocess_detection(detection_result, args):
         line_overlap_threshold=args.line_overlap_threshold,
         region_overlap_threshold=args.region_overlap_threshold,
     )
+    convert = raw_polygons_to_polygons if args.detector == "paddle" else masks_to_polygons
+    return convert(*detection_result, **thresholds)
 
 def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
                                classification_model, model_config, args):

@@ -7,7 +7,9 @@ lines. nafrec needs both, so this combines two ONNX models:
   * a DB text detection model (e.g. PP-OCRv6 det, via ppocrv6_onnx) -> text lines
 
 `PaddleLayoutDetector.predict_polygons(image_path)` returns exactly what
-`seg_inference.predict_polygons` returns:
+`seg_inference.predict_polygons` returns, after the same polygon post-processing
+(small polygon filtering, merging of overlapping polygons, sliver removal; see
+`seg_inference.raw_polygons_to_polygons`):
 
     (line_polygons, line_confs, line_max_mins,
      region_polygons, region_confs, region_max_mins, image_shape)
@@ -323,8 +325,17 @@ class PaddleLayoutDetector:
         return boxes, scores
 
     # ------------------------------------------------------------------
-    def predict_polygons(self, image_path):
-        """Same return value as seg_inference.predict_polygons."""
+    def predict_raw(self, image_path):
+        """
+        Model (GPU) part of polygon prediction: the raw, not yet post-processed detections.
+        Counterpart of seg_inference.predict_masks; the CPU post-processing (merging, filtering)
+        is done by seg_inference.raw_polygons_to_polygons.
+
+        Returns:
+            (line_polygons, line_confs, region_polygons, region_confs, image_shape): lists of int
+            (N, 2) numpy polygons and float confidences, image_shape = (height, width), all in
+            original-image pixel coordinates.
+        """
         from .image_processing import load_with_torchvision
 
         # Load the same way the rest of the pipeline does (torchvision, RGB, no EXIF
@@ -338,34 +349,55 @@ class PaddleLayoutDetector:
         kept = [r for r in regions if r[0] not in self.ignore_ids]
         ignored = [r for r in regions if r[0] in self.ignore_ids]
 
-        region_polygons, region_confs, region_max_mins = [], [], []
+        region_polygons, region_confs = [], []
         for _, score, x1, y1, x2, y2 in kept:
             x1, y1, x2, y2 = (int(round(v)) for v in (x1, y1, x2, y2))
             region_polygons.append(np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=int))
             region_confs.append(score)
-            region_max_mins.append((x1, y1, x2, y2))
 
         def inside(cx, cy, boxes):
             return any(b[2] <= cx <= b[4] and b[3] <= cy <= b[5] for b in boxes)
 
         boxes, scores = self._detect_lines(img_bgr)
-        line_polygons, line_confs, line_max_mins = [], [], []
+        line_polygons, line_confs = [], []
         for quad, score in zip(boxes, scores):
             poly = np.asarray(quad).astype(int)
-            xmin, ymin = poly.min(axis=0)
-            xmax, ymax = poly.max(axis=0)
             if ignored:
                 # drop lines (e.g. text inside figures / seals) that sit in an ignored
                 # region and are not also covered by a kept region
+                xmin, ymin = poly.min(axis=0)
+                xmax, ymax = poly.max(axis=0)
                 cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
                 if inside(cx, cy, ignored) and not inside(cx, cy, kept):
                     continue
             line_polygons.append(poly)
             line_confs.append(float(score))
-            line_max_mins.append((xmin, ymin, xmax, ymax))
 
-        return (line_polygons, line_confs, line_max_mins,
-                region_polygons, region_confs, region_max_mins, image_shape)
+        return line_polygons, line_confs, region_polygons, region_confs, image_shape
+
+    def predict_polygons(self, image_path,
+                         line_percentage_threshold=7e-05,
+                         region_percentage_threshold=7e-05,
+                         line_iou=0.3,
+                         region_iou=0.3,
+                         line_overlap_threshold=0.5,
+                         region_overlap_threshold=0.5):
+        """
+        Convenience wrapper doing both steps in the calling process: `predict_raw` followed by
+        seg_inference.raw_polygons_to_polygons. Same arguments and return value as
+        seg_inference.predict_polygons. The pipeline in main.py calls the two steps separately
+        so that post-processing runs in the CPU workers instead of the model workers.
+        """
+        from .seg_inference import raw_polygons_to_polygons
+
+        line_polygons, line_confs, region_polygons, region_confs, image_shape = self.predict_raw(image_path)
+        return raw_polygons_to_polygons(
+            line_polygons, line_confs, region_polygons, region_confs, image_shape,
+            line_percentage_threshold=line_percentage_threshold,
+            region_percentage_threshold=region_percentage_threshold,
+            line_iou=line_iou, region_iou=region_iou,
+            line_overlap_threshold=line_overlap_threshold,
+            region_overlap_threshold=region_overlap_threshold)
 
 
 def load_paddle_layout_model(layout_model_path, det_model_path, device="cpu", **kwargs):

@@ -102,12 +102,12 @@ nafrec \
 | `--xml_folder` | str | None | Custom path for XML output. If None, saves to `input_folder/alto` or `input_folder/page` |
 | `--json_folder` | str | None | Custom path for .json output. If None, saves to `input_folder/json` |
 | `--confidence_threshold` | float | 0.15 | Detection confidence threshold for filtering detections |
-| `--line_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small line polygons |
-| `--region_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small region polygons |
-| `--line_iou` | float | 0.3 | Threshold value for merging lines based on intersection over union (IoU) |
-| `--region_iou` | float | 0.3 | Threshold value for merging regions based on intersection over union (IoU) |
-| `--line_overlap_threshold` | float | 0.5 | Threshold value for merging lines based on overlapping area |
-| `--region_overlap_threshold` | float | 0.5 | Threshold value for merging regions based on overlapping area |
+| `--line_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small line polygons (applies to both `rfdetr` and `paddle` detectors) |
+| `--region_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small region polygons (applies to both detectors) |
+| `--line_iou` | float | 0.3 | Threshold value for merging lines based on intersection over union (IoU) (applies to both detectors) |
+| `--region_iou` | float | 0.3 | Threshold value for merging regions based on intersection over union (IoU) (applies to both detectors) |
+| `--line_overlap_threshold` | float | 0.5 | Threshold value for merging lines based on overlapping area (applies to both detectors) |
+| `--region_overlap_threshold` | float | 0.5 | Threshold value for merging regions based on overlapping area (applies to both detectors) |
 
 ### Example
 ```bash

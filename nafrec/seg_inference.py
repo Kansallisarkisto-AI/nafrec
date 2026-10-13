@@ -186,8 +186,9 @@ def merge_polygons(polygons, polygon_iou, overlap_threshold, use_verticality=Tru
         
     Returns:
         merged_polygons: List of polygon coordinate arrays
-        polygon_mapping: List where polygon_mapping[i] indicates which output 
-                         polygon the i-th input polygon was merged into (or i if unchanged)
+        output_sources: List with one entry per output polygon, holding the list of indices of
+                        the input polygons it was made from (a single index if unchanged).
+                        This is the format `calculate_confidences` expects.
     """
     n = len(polygons)    
     if n == 0:
@@ -254,14 +255,14 @@ def merge_polygons(polygons, polygon_iou, overlap_threshold, use_verticality=Tru
     
     # Merge each component
     merged_polygons = []
-    polygon_mapping = [-1] * n  # Maps input index to output index
+    output_sources = []  # For each output polygon: indices of the input polygons it came from
     
     for root, indices in components.items():
         if len(indices) == 1:
             # No merge needed
             idx = indices[0]
             merged_polygons.append(polygons[idx])
-            polygon_mapping[idx] = len(merged_polygons) - 1
+            output_sources.append([idx])
         else:
             # Merge all polygons in component
             merged = validated[indices[0]]
@@ -269,21 +270,17 @@ def merge_polygons(polygons, polygon_iou, overlap_threshold, use_verticality=Tru
                 merged = merged.union(validated[idx])
             
             # Extract polygon(s) from result
-            output_idx = len(merged_polygons)
             if merged.geom_type == 'Polygon':
                 merged_polygons.append(np.array(merged.exterior.coords).astype(np.int32))
-                for idx in indices:
-                    polygon_mapping[idx] = output_idx
+                output_sources.append(list(indices))
             elif merged.geom_type in ['MultiPolygon', 'GeometryCollection']:
-                # Split into separate polygons
+                # Split into separate polygons; each part is attributed to all source polygons of the component
                 for geom in merged.geoms:
                     if geom.geom_type == 'Polygon':
                         merged_polygons.append(np.array(geom.exterior.coords).astype(np.int32))
-                # All source polygons map to first output polygon of this component
-                for idx in indices:
-                    polygon_mapping[idx] = output_idx
+                        output_sources.append(list(indices))
     
-    return merged_polygons, polygon_mapping
+    return merged_polygons, output_sources
 
 def calculate_confidences(indices_list, confidence_values):
     """
@@ -378,6 +375,55 @@ def load_rfdetr_model(model_path, device="cuda", batch_size=1, fp16=False):
         model.inference(compile_backend="torchscript", batch_size=batch_size, dtype="float16" if fp16 else "float32")
     return model
 
+def postprocess_polygons(polygons, confs, area_percentages, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
+    """
+    Shared polygon post-processing, independent of where the polygons came from (segmentation masks or
+    a box/quad detector): drops polygons that are too small, merges overlapping polygons, and (for lines)
+    drops polygons that are too thin (slivers).
+
+    Args:
+        polygons: list of polygon coordinate arrays, shape (N, 2), in original image pixels
+        confs: confidence value for each polygon
+        area_percentages: area of each polygon as a fraction of the image area
+        image_shape: image height and width
+        percentage_threshold: polygons with area_percentage <= this are dropped
+        overlap_threshold: threshold value for polygon overlap
+        iou_threshold: threshold value for polygon IoU
+        use_verticality: line mode (horizontal-overlap weighted merging + sliver filtering) if True,
+                         region mode if False
+
+    Returns:
+        merged_polygons: coordinates of merged and non-merged polygons
+        merged_confs: confidence values for merged and non-merged polygons
+        merged_max_mins: (xmin, ymin, xmax, ymax) for merged and non-merged polygons
+    """
+    # Filter polygons by area percentages
+    filtered_polygons = []
+    filtered_confs = []
+
+    for idx in np.where(np.asarray(area_percentages) > percentage_threshold)[0]:
+        filtered_polygons.append(polygons[idx])
+        filtered_confs.append(confs[idx])
+
+    # Merge polygons that overlap too much
+    merged_polygons, merged_sources = merge_polygons(filtered_polygons, iou_threshold, overlap_threshold, use_verticality=use_verticality)
+
+    merged_confs = calculate_confidences(indices_list=merged_sources, confidence_values=filtered_confs)
+
+    # drop polygons that are too thin (slivers)
+    if use_verticality:
+        merged_polygons, merged_confs = filter_slivers(
+            merged_polygons, confs=merged_confs, threshold=0.01*min(image_shape[0], image_shape[1]),
+        )
+
+    merged_max_mins = []
+    for poly in merged_polygons:
+        xmax, ymax = np.max(poly,axis=0)
+        xmin, ymin = np.min(poly,axis=0)
+        merged_max_mins.append((xmin,ymin,xmax,ymax))
+
+    return merged_polygons, merged_confs, merged_max_mins
+
 def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
     """
     Get polygons from segmentation masks, merge overlapping polygons and drop outlier polygons that are too thin.
@@ -406,32 +452,33 @@ def process_polygons(poly_mask, poly_confs, image_shape, percentage_threshold, o
         all_polygons += (polygons)
         new_confs += [conf] * len(polygons)
 
-    # Filter polygons by area percentages
-    filtered_polygons = []
-    filtered_confs = []
+    return postprocess_polygons(
+        all_polygons, new_confs, area_percentages, image_shape,
+        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality)
 
-    for idx in np.where(area_percentages > percentage_threshold)[0]:
-        filtered_polygons.append(all_polygons[idx])
-        filtered_confs.append(new_confs[idx])
+def process_raw_polygons(polygons, confs, image_shape, percentage_threshold, overlap_threshold, iou_threshold, use_verticality=True):
+    """
+    Same as `process_polygons`, but for detectors that output polygons / boxes directly instead of
+    segmentation masks (e.g. the Paddle DB text line detector and the PP-DocLayout region boxes).
+    The polygons must already be in original image pixel coordinates.
 
-    # Merge polygons that overlap too much
-    merged_polygons, merged_indices = merge_polygons(filtered_polygons, iou_threshold, overlap_threshold, use_verticality=use_verticality)
+    Args:
+        polygons: list of polygon coordinate arrays, shape (N, 2)
+        confs: confidence value for each polygon
+        image_shape: image height and width
+        percentage_threshold: polygons smaller than this fraction of the image area are dropped
+        overlap_threshold: threshold value for polygon overlap
+        iou_threshold: threshold value for polygon IoU
 
-    merged_confs = calculate_confidences(indices_list=merged_indices, confidence_values=filtered_confs)
-
-    # drop polygons that are too thin (slivers)
-    if use_verticality:
-        merged_polygons, merged_confs = filter_slivers(
-            merged_polygons, confs=merged_confs, threshold=0.01*min(image_shape[0], image_shape[1]),
-        )
-    
-    merged_max_mins = []
-    for poly in merged_polygons:
-        xmax, ymax = np.max(poly,axis=0)
-        xmin, ymin = np.min(poly,axis=0)
-        merged_max_mins.append((xmin,ymin,xmax,ymax))
-
-    return merged_polygons, merged_confs, merged_max_mins
+    Returns:
+        merged_polygons, merged_confs, merged_max_mins (see `postprocess_polygons`)
+    """
+    polygons = [np.asarray(p) for p in polygons]
+    image_area = image_shape[0] * image_shape[1]
+    area_percentages = np.array([calculate_polygon_area(p) / image_area if len(p) >= 3 else 0.0 for p in polygons])
+    return postprocess_polygons(
+        polygons, list(confs), area_percentages, image_shape,
+        percentage_threshold, overlap_threshold, iou_threshold, use_verticality=use_verticality)
 
 def predict_masks(model, 
                      image_path, 
@@ -555,6 +602,37 @@ def masks_to_polygons(line_mask,
 
     merged_region_polygons, merged_region_confs, merged_region_max_mins = process_polygons(
         region_mask, region_confs, image_shape,
+        region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False)
+
+    return merged_line_polygons, merged_line_confs, merged_line_max_mins, merged_region_polygons, merged_region_confs, merged_region_max_mins, image_shape
+
+
+def raw_polygons_to_polygons(line_polygons,
+                             line_confs,
+                             region_polygons,
+                             region_confs,
+                             image_shape,
+                             line_percentage_threshold=7e-05,
+                             region_percentage_threshold=7e-05,
+                             line_iou=0.3,
+                             region_iou=0.3,
+                             line_overlap_threshold=0.5,
+                             region_overlap_threshold=0.5):
+    """
+    CPU post-processing for detectors that return polygons / boxes directly (e.g. the Paddle backend,
+    see `PaddleLayoutDetector.predict_raw`). Counterpart of `masks_to_polygons`: applies the same
+    small-polygon filtering, merging of overlapping polygons and sliver filtering (see
+    `postprocess_polygons`), with the same thresholds.
+
+    Returns:
+        The same 7-tuple as `masks_to_polygons`.
+    """
+    merged_line_polygons, merged_line_confs, merged_line_max_mins = process_raw_polygons(
+        line_polygons, line_confs, image_shape,
+        line_percentage_threshold, line_overlap_threshold, line_iou, use_verticality=True)
+
+    merged_region_polygons, merged_region_confs, merged_region_max_mins = process_raw_polygons(
+        region_polygons, region_confs, image_shape,
         region_percentage_threshold, region_overlap_threshold, region_iou, use_verticality=False)
 
     return merged_line_polygons, merged_line_confs, merged_line_max_mins, merged_region_polygons, merged_region_confs, merged_region_max_mins, image_shape
