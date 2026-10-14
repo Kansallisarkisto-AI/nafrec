@@ -54,8 +54,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     model = VisionEncoderDecoderModel.from_pretrained(
                                                     model_path,
                                                     torch_dtype=model_dtype,
-                                                    revision=revision,
-                                                    use_safetensors=False
+                                                    revision=revision
                                                 ).to(resolved_device)
 
     if model.config.encoder.model_type == "dinov2":
