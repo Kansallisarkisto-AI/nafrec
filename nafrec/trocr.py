@@ -66,7 +66,10 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             session_options=session_options,
             use_cache=True,
         )
-        model.is_remote_code = False
+
+        def nope():
+            return False
+        model.is_remote_code = nope
         print(f"[info] onnx trocr model loaded on {model.device}")
     except Exception as e:
         print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
