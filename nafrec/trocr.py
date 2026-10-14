@@ -14,7 +14,7 @@ class TrOCRProcessorCustom(TrOCRProcessor):
         self.current_processor = self.image_processor
         self.chat_template = None
 
-def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False):
+def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False, compile=False):
     """
     Load a TrOCR model with custom image size support and positional encoding interpolation.
 
@@ -69,6 +69,9 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
                                                 backend="torchvision",
                                                 do_resize=True,
                                                 revision=revision)
+
+    if compile:
+        model = torch.compile(model)
     
     return model, processor
 
@@ -92,7 +95,7 @@ def predict_text(cropped_lines, recognition_model, processor):
     dtype = next(recognition_model.parameters()).dtype
 
     pixel_values = processor(cropped_lines, return_tensors="pt").pixel_values
-    generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True)
+    generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True, cache_implementation="static")
     generated_ids = generated_dict['sequences']
     generated_scores = generated_dict['scores']
 

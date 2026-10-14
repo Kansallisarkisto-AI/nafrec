@@ -21,7 +21,6 @@ dependencies = [
     "tqdm",
     "torch>=2.4.0",
     "transformers==5.5",
-    "optimum==2.3.0",
     "yattag>=1.16.1",
     "supervision>=0.30.9",
     "huggingface-hub>=1.19.0",

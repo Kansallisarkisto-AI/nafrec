@@ -345,6 +345,11 @@ def build_parser():
         help="Use the TensorRT execution provider if available (off by default; GPUs then use CUDA/ROCm/MIGraphX). Applies to the PP-OCR recognition model and to the Paddle layout + text detection models. Engines are cached in ./trt_enginecache (per model), so the first run builds them and is slow."
     )
     parser.add_argument(
+        "--enable_torch_compile",
+        action="store_true",
+        help="Use torch.compile. Applies to the TrOCR model."
+    )
+    parser.add_argument(
         "--no_trt_dynamic_shapes",
         action="store_true",
         help="TensorRT: don't pass min/opt/max shape profiles to the TensorRT EP for PP-OCR / Paddle models (it then rebuilds engines whenever a new input shape appears, which for the Paddle text detector means for nearly every page size)."
@@ -675,7 +680,7 @@ def load_latin_recognizer(args, device):
             enable_tensorrt=args.enable_tensorrt,
         )
         return model, None
-    return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)
+    return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec, compile=args.enable_torch_compile)
 
 # ---------------------------------------------------------------------------
 # Device selection
@@ -860,6 +865,7 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
                 args.cyrillic_processor_path,
                 device_string,
                 fp16=args.fp16_rec,
+                compile=args.enable_torch_compile
             )
 
         if classification_enabled(args):
