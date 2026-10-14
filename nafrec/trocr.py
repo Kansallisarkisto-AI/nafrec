@@ -273,7 +273,8 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             session_options=session_options,
             use_cache=use_cache,
             use_merged=False,  # the merged decoder's `If` node can't be built by TensorRT
-            use_io_binding=True
+            use_io_binding=True,
+            export=False
         )
 
         def nope():
