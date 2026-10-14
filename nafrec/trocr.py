@@ -38,6 +38,8 @@ def _trt_dim(name, axis, batch, enc_seq, ids_seq, past_seq, image_hw):
     """(min, opt, max) for one dynamic dimension, decided by the input's name (optimum's export naming)."""
     if axis == 0:
         return batch
+    if name == "pixel_values" and axis == 1:      # exports often leave the channel dim dynamic too
+        return (3, 3, 3)
     if name == "pixel_values" and axis in (2, 3) and image_hw:
         v = int(image_hw[axis - 2])
         return (v, v, v)
