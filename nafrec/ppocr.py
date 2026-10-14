@@ -146,7 +146,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                 if enable_tensorrt:
                     print(f"[info] using TensorRT" + (f" for {label}" if label else ""))
                     trt_ep_options = {
-                        "trt_fp16_enable": True if label == "ppocrv6" else False,
+                        "trt_fp16_enable": True if (label == "ppocrv6" or label == "trocr")  else False,
                         "trt_engine_cache_enable": True,
                         "trt_timing_cache_enable": True,
                         "trt_dump_ep_context_model": True,
