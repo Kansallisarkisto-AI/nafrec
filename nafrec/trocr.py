@@ -54,6 +54,19 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     # Load model and processor
     try:
         from optimum.onnxruntime import ORTModelForVision2Seq
+        from optimum.utils.file_utils import find_files_matching_pattern
+        from optimum.onnxruntime.constants import ONNX_FILE_PATTERN
+
+        onnx_files = find_files_matching_pattern(
+            model_path,
+            pattern=ONNX_FILE_PATTERN,
+            glob_pattern="**/*.onnx",
+            revision=revision,
+        )
+
+        if len(onnx_files) == 0:
+            raise Exception("Zero onnx files")
+        
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
         providers, session_options = _get_providers_and_options(resolved_device, label="trocr", enable_tensorrt=False)
