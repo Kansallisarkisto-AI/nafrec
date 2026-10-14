@@ -228,7 +228,7 @@ def flatten_lines(segment_predictions):
 
 def get_page_stats(line_dicts, image_name, height, width):
     """
-    Compile page / image level confidence aggregates for entire text.
+    Compile page / image level confidence aggregates and detect language for entire text.
     """
     # Extract scores and line texts from line dicts
     scores = [d['text_conf'] for d in line_dicts]
@@ -269,6 +269,7 @@ def process_text_predictions(text_predictions, segment_predictions, n_lines):
                         'page_conf_25': text_predictions['page_conf_25'],
                         'page_conf_75': text_predictions['page_conf_75'],
                         'n_long_rowtext': text_predictions['n_long_rowtext'],
+                        'language': text_predictions['language'],
                         'region_conf': region.get('region_conf', region.get('conf', None)),
                         'region_coords': region.get('region_coords', region.get('coords', None)),
                         'region_name': region.get('region_name', region.get('name', None)),
