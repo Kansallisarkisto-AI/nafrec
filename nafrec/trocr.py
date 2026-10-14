@@ -15,7 +15,7 @@ class TrOCRProcessorCustom(TrOCRProcessor):
         self.current_processor = self.image_processor
         self.chat_template = None
 
-def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False):
+def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False, enable_tensorrt=False):
     """
     Load a TrOCR model with custom image size support and positional encoding interpolation.
 
@@ -56,14 +56,14 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         from optimum.onnxruntime import ORTModelForVision2Seq
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
-        providers, session_options = _get_providers_and_options(resolved_device, label="trocr")
+        providers, session_options = _get_providers_and_options(resolved_device, label="trocr", enable_tensorrt=enable_tensorrt)
         model = ORTModelForVision2Seq.from_pretrained(
             model_path,
             revision=revision,
             providers=[p[0] if isinstance(p, tuple) else p for p in providers],
             provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
             session_options=session_options,
-            use_cache=False,
+            use_cache=True,
             use_io_binding=True
         )
 

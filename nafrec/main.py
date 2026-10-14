@@ -675,7 +675,7 @@ def load_latin_recognizer(args, device):
             enable_tensorrt=args.enable_tensorrt,
         )
         return model, None
-    return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)
+    return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec, enable_tensorrt=args.enable_tensorrt)
 
 # ---------------------------------------------------------------------------
 # Device selection
@@ -860,6 +860,7 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
                 args.cyrillic_processor_path,
                 device_string,
                 fp16=args.fp16_rec,
+                enable_tensorrt=args.enable_tensorrt,
             )
 
         if classification_enabled(args):
