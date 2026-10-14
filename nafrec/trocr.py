@@ -64,7 +64,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
             session_options=session_options,
             use_cache=True,
-            use_io_binding=False
+            use_io_binding=True
         )
 
         def nope():
