@@ -64,6 +64,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
             session_options=session_options,
             use_cache=True,
+            use_io_binding=False
         )
 
         def nope():
@@ -71,7 +72,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         model.is_remote_code = nope
 
         # something is causing issues with io binding and the kv cache branch in the decoder
-        model.decoder.use_io_binding = False
+        #model.decoder.use_io_binding = False
         print(f"[info] onnx trocr model loaded on {model.device}")
     except Exception as e:
         #print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
