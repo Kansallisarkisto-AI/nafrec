@@ -52,7 +52,6 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     ViTEmbeddings.forward = universal_embeddings_forward
     
     # Load model and processor
-
     try:
         from optimum.onnxruntime import ORTModelForVision2Seq
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
@@ -72,7 +71,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         model.is_remote_code = nope
         print(f"[info] onnx trocr model loaded on {model.device}")
     except Exception as e:
-        print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
+        #print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
         model = VisionEncoderDecoderModel.from_pretrained(
                                                         model_path,
                                                         torch_dtype=model_dtype,
