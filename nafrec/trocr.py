@@ -250,6 +250,18 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     # Load model
     try:
         from optimum.onnxruntime import ORTModelForVision2Seq
+        from optimum.utils.file_utils import find_files_matching_pattern
+        from optimum.onnxruntime.constants import ONNX_FILE_PATTERN
+
+        onnx_files = find_files_matching_pattern(
+            model_path,
+            pattern=ONNX_FILE_PATTERN,
+            glob_pattern="**/*.onnx",
+            revision=revision,
+        )
+
+        if len(onnx_files) == 0:
+            raise Exception("Zero onnx files")
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
         use_cache = True
@@ -273,8 +285,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             session_options=session_options,
             use_cache=use_cache,
             use_merged=False,  # the merged decoder's `If` node can't be built by TensorRT
-            use_io_binding=True,
-            export=False
+            use_io_binding=True
         )
 
         def nope():
