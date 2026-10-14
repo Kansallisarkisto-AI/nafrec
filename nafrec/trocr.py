@@ -262,6 +262,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
 
         if len(onnx_files) == 0:
             raise Exception("Zero onnx files")
+        
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
         use_cache = True
