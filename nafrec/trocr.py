@@ -71,8 +71,10 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
                                                 revision=revision)
 
     if compile:
-        model = torch.compile(model)
-    
+        # Compile the encoder and decoder separately
+        model.encoder = torch.compile(model.encoder)
+        model.decoder = torch.compile(model.decoder, dynamic=True)
+            
     return model, processor
 
 
