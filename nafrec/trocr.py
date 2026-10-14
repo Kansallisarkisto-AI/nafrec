@@ -4,6 +4,7 @@ import math
 import torch
 from transformers.models.vit.modeling_vit import ViTPatchEmbeddings, ViTEmbeddings
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+from .ppocr import _get_providers_and_options
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -51,11 +52,29 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     ViTEmbeddings.forward = universal_embeddings_forward
     
     # Load model and processor
-    model = VisionEncoderDecoderModel.from_pretrained(
-                                                    model_path,
-                                                    torch_dtype=model_dtype,
-                                                    revision=revision
-                                                ).to(resolved_device)
+
+    try:
+        from optimum.onnxruntime import ORTModelForVision2Seq
+        # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
+        # optimum wants provider names and their options as two separate lists.
+        providers, session_options = _get_providers_and_options(resolved_device, label="trocr")
+        model = ORTModelForVision2Seq.from_pretrained(
+            model_path,
+            revision=revision,
+            providers=[p[0] if isinstance(p, tuple) else p for p in providers],
+            provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
+            session_options=session_options,
+            use_cache=True,
+        )
+        print(f"[info] onnx trocr model loaded on {model.device}")
+    except Exception as e:
+        print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
+        model = VisionEncoderDecoderModel.from_pretrained(
+                                                        model_path,
+                                                        torch_dtype=model_dtype,
+                                                        revision=revision
+                                                    ).to(resolved_device)
+        print("[info] regular trocr model loaded")
 
     if model.config.encoder.model_type == "dinov2":
         processor = TrOCRProcessorCustom.from_pretrained(processor_path, revision=revision)
@@ -87,9 +106,10 @@ def predict_text(cropped_lines, recognition_model, processor):
             - scores (list): Confidence scores for each prediction.
             - generated_text (list): Predicted text strings for each line.
     """
-    # Device and dtype are read from the model's OWN parameters, not a module-level global
-    device = next(recognition_model.parameters()).device
-    dtype = next(recognition_model.parameters()).dtype
+    # Device and dtype are read from the model itself, not a module-level global.
+    # (.device / .dtype exist on both the PyTorch model and the ONNX Runtime model)
+    device = recognition_model.device
+    dtype = recognition_model.dtype
 
     pixel_values = processor(cropped_lines, return_tensors="pt").pixel_values
     generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True)
