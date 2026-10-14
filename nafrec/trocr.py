@@ -76,7 +76,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
             providers=[p[0] if isinstance(p, tuple) else p for p in providers],
             provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
             session_options=session_options,
-            use_cache=True,
+            use_cache=True,  # Check later for cyrillic model
             use_merged=False, # use_merged is buggy
             use_io_binding=True
         )
