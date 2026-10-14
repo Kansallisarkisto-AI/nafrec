@@ -54,8 +54,7 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     model = VisionEncoderDecoderModel.from_pretrained(
                                                     model_path,
                                                     torch_dtype=model_dtype,
-                                                    revision=revision,
-                                                    use_cache=True
+                                                    revision=revision
                                                 ).to(resolved_device)
 
     if model.config.encoder.model_type == "dinov2":
@@ -93,7 +92,7 @@ def predict_text(cropped_lines, recognition_model, processor):
     dtype = next(recognition_model.parameters()).dtype
 
     pixel_values = processor(cropped_lines, return_tensors="pt").pixel_values
-    generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True)
+    generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True, use_cache=True)
     generated_ids = generated_dict['sequences']
     generated_scores = generated_dict['scores']
 
