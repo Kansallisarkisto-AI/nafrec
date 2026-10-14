@@ -3,6 +3,7 @@ import json
 import glob
 import numpy as np
 from pathlib import Path
+from langdetect import detect
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
@@ -226,6 +227,22 @@ def flatten_lines(segment_predictions):
         n_lines.append(len(region['lines']))
     return img_lines, img_line_confs, n_lines
 
+def detect_language(text_lines):
+    """
+    Detect the language of text from multiple text lines.
+
+    Args:
+        text_lines: List of text strings to analyze.
+
+    Returns:
+        str: Detected language code, or "unknown" if detection fails.
+    """
+    combined_text = " ".join(text_lines)
+    try:
+        return detect(combined_text)
+    except:
+        return "unknown"
+
 def get_page_stats(line_dicts, image_name, height, width):
     """
     Compile page / image level confidence aggregates and detect language for entire text.
@@ -240,6 +257,8 @@ def get_page_stats(line_dicts, image_name, height, width):
     page_conf_75 = np.percentile(scores, 75) if scores else 0
     # Calculate number of rows exceeding specified length
     n_long_rowtext = sum(1 for d in line_dicts if d['row_length'] > 100)
+    # Detect the language of the text
+    language = detect_language(generated_text)
     lines_dict = {
         'img_name': image_name, 
         'height': height, 
@@ -248,7 +267,8 @@ def get_page_stats(line_dicts, image_name, height, width):
         'page_conf_median': page_conf_median, 
         'page_conf_25': page_conf_25, 
         'page_conf_75':page_conf_75, 
-        'n_long_rowtext': n_long_rowtext,
+        'n_long_rowtext': n_long_rowtext, 
+        'language': language, 
         'text_lines': line_dicts
     }
     return lines_dict
