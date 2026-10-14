@@ -56,17 +56,19 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         from optimum.onnxruntime import ORTModelForVision2Seq
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
-        providers, session_options = _get_providers_and_options(resolved_device, label="trocr")
+        providers, session_options = _get_providers_and_options(resolved_device, label="trocr", enable_tensorrt=False)
         model = ORTModelForVision2Seq.from_pretrained(
             model_path,
             revision=revision,
             providers=[p[0] if isinstance(p, tuple) else p for p in providers],
             provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
             session_options=session_options,
-            use_cache=False,
+            use_cache=True,
+            use_merged=False, # use_merged is buggy
             use_io_binding=True
         )
 
+        # patch issue with newest transformers 5.x
         def nope():
             return False
         model.is_remote_code = nope
