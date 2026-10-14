@@ -100,11 +100,35 @@ def _encoder_seq_len(encoder_path, image_hw, model_path, revision):
         return (image_hw[0] // patch[0]) * (image_hw[1] // patch[1]) + 1   # + CLS token (ViT / BEiT / DINOv2)
 
 
+def _processor_image_hw(processor):
+    """(H, W) of the images the processor hands to the model, read from the loaded TrOCRProcessor.
+    Works for dict sizes and for the torchvision backend's SizeDict. None if it can't tell."""
+    ip = getattr(processor, "image_processor", processor)
+
+    def get(size, key):
+        return size.get(key) if isinstance(size, dict) else getattr(size, key, None)
+
+    # a centre crop, when enabled, is the final size; otherwise the resize target
+    crop = getattr(ip, "crop_size", None)
+    size = crop if getattr(ip, "do_center_crop", False) and crop else getattr(ip, "size", None)
+    if isinstance(size, int):
+        return size, size
+    if size is None:
+        return None
+    if get(size, "height") and get(size, "width"):
+        return int(get(size, "height")), int(get(size, "width"))
+    for k in ("shortest_edge", "longest_edge"):
+        if get(size, k):
+            return int(get(size, k)), int(get(size, k))
+    return None
+
+
 def predetermine_trocr_trt_profile(model_path, revision, batch_size, use_cache=True, image_hw=None):
     """Work out, before loading anything on the GPU, the TensorRT profile for an optimum TrOCR ONNX export.
 
-    Batch 1..batch_size (encoder) and 1..batch_size*num_beams (decoders). image_hw: (H, W) of pixel_values; by
-    default the static size in the encoder graph, else encoder.image_size from the config.
+    Batch 1..batch_size (encoder) and 1..batch_size*num_beams (decoders). image_hw: (H, W) of pixel_values,
+    normally what the image processor produces (see _processor_image_hw). When None: a static size in the
+    encoder graph, else encoder.image_size in the model config.
     Returns (input_names, (min_shapes, opt_shapes, max_shapes)) for _get_providers_and_options(trt_profile=...).
     """
     paths = {k: _find_trocr_onnx(model_path, revision, f) for k, f in _TROCR_ONNX_NAMES.items()}
@@ -123,13 +147,19 @@ def predetermine_trocr_trt_profile(model_path, revision, batch_size, use_cache=T
     dec_batch = (1, batch_size * beams, batch_size * beams)
 
     enc_specs = onnx_input_specs(paths["encoder"])
+    onnx_hw = None
     for name, dims in enc_specs:
         if name == "pixel_values" and len(dims) == 4 and None not in dims[2:]:
-            image_hw = (dims[2], dims[3])
+            onnx_hw = (dims[2], dims[3])
+    if image_hw is None:
+        image_hw = onnx_hw
     if image_hw is None:
         from transformers import AutoConfig
         size = AutoConfig.from_pretrained(model_path, revision=revision).encoder.image_size
         image_hw = (size, size) if isinstance(size, int) else tuple(size)
+    if onnx_hw is not None and tuple(onnx_hw) != tuple(image_hw):
+        print(f"[warn] TrOCR encoder ONNX has a fixed input size {onnx_hw[0]}x{onnx_hw[1]} but the image "
+              f"processor produces {image_hw[0]}x{image_hw[1]}; the model will not accept the processor's images")
     enc_seq = _encoder_seq_len(paths["encoder"], image_hw, model_path, revision)
 
     # with a cache both decoders only ever see one new token; without it the decoder sees the whole sequence
@@ -148,6 +178,19 @@ def predetermine_trocr_trt_profile(model_path, revision, batch_size, use_cache=T
     return format_trt_profile(merged)
 
 
+def _load_trocr_processor(processor_path, encoder_type, revision):
+    if encoder_type == "dinov2":
+        return TrOCRProcessorCustom.from_pretrained(processor_path, revision=revision)
+    if "microsoft" in processor_path.lower():
+        return TrOCRProcessor.from_pretrained(processor_path,
+                                              backend="torchvision",
+                                              revision=revision)
+    return TrOCRProcessor.from_pretrained(processor_path,
+                                          backend="torchvision",
+                                          do_resize=True,
+                                          revision=revision)
+
+
 def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False,
                      enable_tensorrt=False, batch_size=8, trt_cache_subdir="trocr",
                      trt_image_hw=None):
@@ -162,7 +205,8 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         processor_path: Path to the TrOCR processor directory or checkpoint.
         enable_tensorrt: run the ONNX encoder and decoders on TensorRT (ONNX models only). The shape profile is
             worked out from the exported ONNX files before the sessions are created.
-        trt_image_hw: (H, W) override for the TensorRT pixel_values profile (default: from the ONNX / config).
+        trt_image_hw: (H, W) override for the TensorRT pixel_values profile (default: the size the TrOCRProcessor
+            produces, then the ONNX, then the model config).
         batch_size: largest recognition batch (--trocr_batch_size); sets the TensorRT batch range 1..batch_size.
         trt_cache_subdir: prefix of the engine cache subfolders under ./trt_enginecache.
 
@@ -191,7 +235,17 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     ViTPatchEmbeddings.forward = universal_patch_forward
     ViTEmbeddings.forward = universal_embeddings_forward
     
-    # Load model and processor
+    # The processor is built first when possible: its image size sets the TensorRT profile. Which processor class
+    # to use depends on the encoder type, read from the config (built after the model if that fails).
+    processor = None
+    try:
+        from transformers import AutoConfig
+        encoder_type = AutoConfig.from_pretrained(model_path, revision=revision).encoder.model_type
+        processor = _load_trocr_processor(processor_path, encoder_type, revision)
+    except Exception:
+        pass
+
+    # Load model
     try:
         from optimum.onnxruntime import ORTModelForVision2Seq
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
@@ -200,8 +254,9 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         trt_profile = None
         if enable_tensorrt and str(resolved_device).startswith("cuda"):
             try:
+                image_hw = trt_image_hw or (_processor_image_hw(processor) if processor is not None else None)
                 trt_profile = predetermine_trocr_trt_profile(model_path, revision, batch_size,
-                                                             use_cache=use_cache, image_hw=trt_image_hw)
+                                                             use_cache=use_cache, image_hw=image_hw)
             except Exception as e:
                 print(f"[warn] no TensorRT profile for TrOCR ({type(e).__name__}: {e}) -- using CUDA")
                 enable_tensorrt = False
@@ -235,19 +290,9 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
                                                     ).to(resolved_device)
         print("[info] regular trocr model loaded")
 
-    if model.config.encoder.model_type == "dinov2":
-        processor = TrOCRProcessorCustom.from_pretrained(processor_path, revision=revision)
-    elif "microsoft" in processor_path.lower():
-        processor = TrOCRProcessor.from_pretrained(processor_path,
-                                        backend="torchvision",
-                                        revision=revision)
-        
-    else:
-        processor = TrOCRProcessor.from_pretrained(processor_path,
-                                                backend="torchvision",
-                                                do_resize=True,
-                                                revision=revision)
-    
+    if processor is None:
+        processor = _load_trocr_processor(processor_path, model.config.encoder.model_type, revision)
+
     return model, processor
 
 
