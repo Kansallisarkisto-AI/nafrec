@@ -1074,7 +1074,7 @@ def main(args):
             ):
                 if status == "ok":
                     n_ok += 1
-                    if start_time is None:
+                    if start_time is None and n_ok > 50: # warmup
                         start_time = time.time()
                 elif status == "info":
                     tqdm.write(f"[info] {image_path}: {msg}")
@@ -1084,7 +1084,7 @@ def main(args):
     finally:
         # len-1 because we don't consider the first image
         if start_time is not None:
-            print(f"Images/s: {(len(images) - 1) / (time.time()- start_time)}")
+            print(f"Images/s: {(len(images) - 50) / (time.time()- start_time)}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
