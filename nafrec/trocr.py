@@ -160,24 +160,28 @@ def predict_text(cropped_lines, recognition_model, processor):
         normalize_logits=True,
     )
 
-    pad_token_id = processor.tokenizer.pad_token_id
-
     # For encoder-decoder models, generated_ids normally begins with a decoder
     # start token, while transition scores correspond to subsequent tokens.
     generated_token_ids = generated_ids[:, -token_log_probs.shape[1]:]
 
-    if pad_token_id is None:
-        token_mask = torch.ones_like(
-            generated_token_ids,
-            dtype=torch.bool,
-        )
-    else:
-        token_mask = generated_token_ids.ne(pad_token_id)
+    # Token inclusion, as in transformers' beam search scoring:
+    # every generated token up to and including the first EOS is counted
+    # (BOS and other special tokens included); everything after it is not.
+    eos_token_id = recognition_model.generation_config.eos_token_id
+    if eos_token_id is None:
+        eos_token_id = processor.tokenizer.eos_token_id
+    if eos_token_id is None:
+        eos_token_id = []
+    elif isinstance(eos_token_id, int):
+        eos_token_id = [eos_token_id]
 
-    # Exclude special tokens from confidence aggregation where possible.
-    special_token_ids = set(processor.tokenizer.all_special_ids)
-    for special_token_id in special_token_ids:
-        token_mask &= generated_token_ids.ne(special_token_id)
+    is_eos = torch.isin(
+        generated_token_ids,
+        torch.tensor(eos_token_id, device=generated_token_ids.device,
+                     dtype=generated_token_ids.dtype),
+    )
+    # True for positions with no EOS strictly before them.
+    token_mask = (is_eos.cumsum(dim=1) - is_eos.long()) == 0
 
     token_counts = token_mask.sum(dim=1).clamp(min=1)
 
