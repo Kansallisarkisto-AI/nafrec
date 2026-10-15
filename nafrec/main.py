@@ -1015,7 +1015,7 @@ def process_single_image(image_path):
         save_xml(preds, xml_input)
         if args.output_json:
             save_json_output(preds, image_path, args)
-        return image_path, "ok", ""
+        return image_path, "ok", sum(len(r["text_lines"]) for r in preds)  # n lines sent to recognition
     except Exception:
         return image_path, "error", traceback.format_exc()
 
@@ -1054,6 +1054,7 @@ def main(args):
     inference_workers = start_inference_workers(ctx, args, devices, queues, inference_results)
 
     n_ok = n_err = 0
+    n_lines_timed = 0  # lines in images after the first (matches the timing window)
 
     start_time = None
     try:
@@ -1070,6 +1071,8 @@ def main(args):
                     n_ok += 1
                     if start_time is None:
                         start_time = time.time()
+                    else:
+                        n_lines_timed += msg
                 elif status == "info":
                     tqdm.write(f"[info] {image_path}: {msg}")
                 else:
@@ -1078,7 +1081,10 @@ def main(args):
     finally:
         # len-1 because we don't consider the first image
         if start_time is not None:
-            print(f"Images/s: {(len(images) - 1) / (time.time()- start_time)}")
+            elapsed = time.time() - start_time
+            print(f"Images/s: {(len(images) - 1) / elapsed}")
+            if n_lines_timed:
+                print(f"Lines: {n_lines_timed}, ms/line: {1000 * elapsed / n_lines_timed:.2f}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')
