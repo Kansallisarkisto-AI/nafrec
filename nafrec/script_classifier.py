@@ -1,4 +1,4 @@
-import os 
+import os
 import torch
 import numpy as np
 import torch.nn as nn
@@ -16,15 +16,17 @@ IMAGE_HEIGHT = 96
 NUM_CLASSES = 2
 IDX2LABEL = {0: "cyrillic", 1: "latin"}
 
+
 class ModelBackend:
     def __init__(self, checkpoint_path: str, device: str):
         if device == "cuda" and not torch.cuda.is_available():
-            print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
+            print(
+                "[warn] requested cuda but no CUDA device is available -- falling back to cpu")
             device = "cpu"
         self.device = torch.device(device)
         model = self.build_model(checkpoint_path)
         self.model = model.to(self.device).eval()
-    
+
     def build_model(self, checkpoint_path: str):
         """
         Builds a model using trained model weights.
@@ -36,7 +38,7 @@ class ModelBackend:
         model.classifier[2] = nn.Linear(in_features, NUM_CLASSES)
         model.load_state_dict(ckpt["model_state_dict"])
         return model
-    
+
     def predict_batch(self, batch_tensor: torch.Tensor):
         """
         batch_tensor: (N, C, H, W). 
@@ -52,12 +54,15 @@ class ModelBackend:
             torch.cuda.synchronize()
         return pred.cpu().tolist(), conf.cpu().tolist()
 
+
 def load_classification_model(model_path: str, device: str):
     """Loads trained PyTorch model using ModelBackend class."""
     ext = os.path.splitext(model_path)[1].lower()
     if ext not in (".pt", ".pth"):
-        raise ValueError(f"Unrecognized model extension: {ext} (expected .pt/.pth)")
+        raise ValueError(
+            f"Unrecognized model extension: {ext} (expected .pt/.pth)")
     return ModelBackend(model_path, device)
+
 
 def preprocess_image(image) -> torch.Tensor:
     """
@@ -68,31 +73,33 @@ def preprocess_image(image) -> torch.Tensor:
         image = np.array(image.convert("RGB"))
     elif image.ndim == 2:
         image = np.stack([image, image, image], axis=-1)
- 
+
     image = np.ascontiguousarray(image)
-    tensor = torch.from_numpy(image).permute(2, 0, 1)  # (H, W, C) uint8 -> (C, H, W) uint8
- 
+    tensor = torch.from_numpy(image).permute(
+        2, 0, 1)  # (H, W, C) uint8 -> (C, H, W) uint8
+
     tensor = TF.resize(tensor, [IMAGE_HEIGHT, IMAGE_WIDTH], antialias=True)
     tensor = tensor.float() / 255.0
     tensor = TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
     return tensor
 
+
 def classify_lines(data, model):
     """
     Returns a list the same length as line_images, in the same order.
- 
+
     A line that fails to preprocess is never dropped: it's assigned a
     fallback result using this call's majority predicted label among
     the lines that did classify successfully. Its
     result["fallback"] is True and result["confidence"] is None.
- 
+
     If every line in the call fails, default_label is used if given.
     """
     results = [None] * len(data.line_images)
     failed_indices = []
 
     for i in range(0, len(data.line_images), data.batch_size):
-        batch_images = data.line_images[i : i + data.batch_size]
+        batch_images = data.line_images[i: i + data.batch_size]
         tensors = []
         tensor_indices = []
         for j, image in enumerate(batch_images):
@@ -116,9 +123,10 @@ def classify_lines(data, model):
                 "fallback": False,
                 "error": None
             }
-        
+
     if failed_indices:
-        successful_labels = [r["predicted_label"] for r in results if r is not None]
+        successful_labels = [r["predicted_label"]
+                             for r in results if r is not None]
         if successful_labels:
             majority_label = Counter(successful_labels).most_common(1)[0][0]
         elif data.default_label is not None:
@@ -132,6 +140,7 @@ def classify_lines(data, model):
             f"label {majority_label} (this call's majority among successful predictions)"
         )
         for item in failed_indices:
-            results[item["idx"]] = {"predicted_label": majority_label, "confidence": None, "fallback": True, "error": item["error"]}
+            results[item["idx"]] = {"predicted_label": majority_label,
+                                    "confidence": None, "fallback": True, "error": item["error"]}
 
     return results

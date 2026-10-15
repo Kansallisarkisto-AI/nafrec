@@ -1,3 +1,12 @@
+from .utils import load_image_paths, get_default_region, get_line_regions, order_regions_lines, flatten_lines, process_text_predictions, get_page_stats, save_json_output
+from .script_classifier import load_classification_model, classify_lines
+from .image_processing import load_with_torchvision, crop_lines
+from .paddle_layout import load_paddle_layout_model
+from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons, raw_polygons_to_polygons
+from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
+from .trocr import get_text_preds, load_trocr_model
+from .xml_output import save_xml
+import torch
 import os
 import time
 
@@ -21,16 +30,7 @@ warnings.filterwarnings(
     message=".*torch.jit.script.*is deprecated.*",
     category=FutureWarning,
 )
-import torch
 
-from .xml_output import save_xml
-from .trocr import get_text_preds, load_trocr_model
-from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
-from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons, raw_polygons_to_polygons
-from .paddle_layout import load_paddle_layout_model
-from .image_processing import load_with_torchvision, crop_lines
-from .script_classifier import load_classification_model, classify_lines
-from .utils import load_image_paths, get_default_region, get_line_regions, order_regions_lines, flatten_lines, process_text_predictions, get_page_stats, save_json_output
 
 class XmlInput(BaseModel):
     image_path: str
@@ -42,10 +42,12 @@ class XmlInput(BaseModel):
     classification_model_name: Optional[str] = None
     text_recognition_model_name: str
 
+
 class ClassifierInput(BaseModel):
     line_images: list
     batch_size: int
     default_label: str
+
 
 class OCRInput(BaseModel):
     line_images: list
@@ -53,8 +55,10 @@ class OCRInput(BaseModel):
     line_confs: list
     batch_size: int
 
+
 def build_parser():
-    parser = argparse.ArgumentParser(description="Load and run inference model")
+    parser = argparse.ArgumentParser(
+        description="Load and run inference model")
     parser.add_argument(
         "--device",
         type=str,
@@ -106,7 +110,7 @@ def build_parser():
     parser.add_argument(
         "--region_model_name",
         type=str,
-        default = 'rfdetr_text_seg_model_202510',
+        default='rfdetr_text_seg_model_202510',
         help="region model name"
     )
     parser.add_argument(
@@ -405,8 +409,10 @@ def build_parser():
 
     return parser
 
+
 def parse_args(argv=None):
     return build_parser().parse_args(argv)
+
 
 def make_args(**overrides):
     """
@@ -414,12 +420,14 @@ def make_args(**overrides):
     arguments (names are the CLI option names without leading dashes), e.g.
     make_args(input_folder="imgs", gpu_ids=[0, 2], cpu_processes=12).
     """
-    defaults = {a.dest: a.default for a in build_parser()._actions if a.dest != "help"}
+    defaults = {a.dest: a.default for a in build_parser(
+    )._actions if a.dest != "help"}
     unknown = set(overrides) - set(defaults)
     if unknown:
         raise TypeError(f"Unknown option(s): {sorted(unknown)}")
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
+
 
 def run(input_folder, **options):
     """
@@ -434,6 +442,7 @@ def run(input_folder, **options):
     """
     return main(make_args(input_folder=input_folder, **options))
 
+
 def split_by_label(classification_results):
     """
     Single pass over classification_results, splitting into index lists
@@ -443,6 +452,7 @@ def split_by_label(classification_results):
     for i, result in enumerate(classification_results):
         indices_by_label.setdefault(result["predicted_label"], []).append(i)
     return indices_by_label
+
 
 def get_text_predictions(
     classification_results,
@@ -469,14 +479,14 @@ def get_text_predictions(
     """
     n_lines = len(classification_results)
     indices_by_label = split_by_label(classification_results)
- 
+
     all_text_predictions = [None] * n_lines
     model_names = {
-        "cyrillic": args.cyrillic_text_rec_model_name, 
+        "cyrillic": args.cyrillic_text_rec_model_name,
         "latin": args.text_rec_model_name
     }
     used_models = []
- 
+
     for label, indices in indices_by_label.items():
         if not indices:
             continue
@@ -485,9 +495,9 @@ def get_text_predictions(
                 f"No HTR model configured for predicted_label={label} "
                 f"({len(indices)} line(s) affected)"
             )
- 
+
         model, processor = model_config[label]
- 
+
         subset_lines = [cropped_lines[i] for i in indices]
         subset_polygons = [line_polygons[i] for i in indices]
         subset_confs = [img_line_confs[i] for i in indices]
@@ -515,7 +525,7 @@ def get_text_predictions(
                 f"{len(indices)} input line(s) -- results can't be safely matched back to "
                 f"their original positions."
             )
- 
+
         # Place each result back to its original line index.
         for orig_idx, prediction in zip(indices, subset_predictions):
             classification_pred = classification_results[orig_idx]
@@ -523,8 +533,9 @@ def get_text_predictions(
                 prediction["predicted_script"] = classification_pred["predicted_label"]
                 prediction["script_pred_conf"] = classification_pred["confidence"]
             all_text_predictions[orig_idx] = prediction
- 
-    missing = [i for i, pred in enumerate(all_text_predictions) if pred is None]
+
+    missing = [i for i, pred in enumerate(
+        all_text_predictions) if pred is None]
     if missing:
         raise ValueError(
             f"{len(missing)} line(s) never received a transcription result "
@@ -537,24 +548,30 @@ def get_text_predictions(
 
     return all_text_predictions, model_name
 
+
 def cyrillic_enabled(args):
     """Is the cyrillic recognition model configured?"""
     return bool(args.cyrillic_recognition_model_path)
+
 
 def latin_enabled(args):
     """Is the main (latin-script) recognition model configured? (TrOCR, or PP-OCR with --use_ppocr)"""
     return bool(args.ppocr_model_path if args.use_ppocr else args.recognition_model_path)
 
+
 def classification_enabled(args):
     """Script classification is only meaningful (and only used) when there are two models to choose between."""
     return latin_enabled(args) and cyrillic_enabled(args)
 
+
 def validate_args(args):
     if args.detector == "paddle":
         if not args.paddle_det_model_path:
-            raise ValueError("detector='paddle' requires paddle_det_model_path (text line detection ONNX model)")
+            raise ValueError(
+                "detector='paddle' requires paddle_det_model_path (text line detection ONNX model)")
         if not args.paddle_layout_model_path:
-            print("[info] no paddle layout model: each page is treated as a single full-page region")
+            print(
+                "[info] no paddle layout model: each page is treated as a single full-page region")
     latin, cyr = latin_enabled(args), cyrillic_enabled(args)
     if not (latin or cyr):
         raise ValueError("No recognition model configured: set recognition_model_path "
@@ -568,10 +585,12 @@ def validate_args(args):
         required.append("script_classification_model_path")
     missing = [n for n in required if not getattr(args, n)]
     if missing:
-        raise ValueError(f"Missing required option(s) for the configured models: {missing}")
+        raise ValueError(
+            f"Missing required option(s) for the configured models: {missing}")
     if not (latin and cyr):
         print(f"[info] only the {'main' if latin else 'cyrillic'} recognition model is configured: "
               "script classification disabled, all lines go to it")
+
 
 def classify_or_skip(cropped_lines, classification_model, model_config, args):
     """
@@ -594,6 +613,7 @@ def classify_or_skip(cropped_lines, classification_model, model_config, args):
     )
     return classify_lines(classifier_payload, classification_model)
 
+
 def build_model_config(recognition_model=None, processor=None, cyrillic_recognition_model=None, cyrillic_processor=None):
     """{label: (model, processor)} for the models that are not None (at least one required)."""
     config = {}
@@ -605,20 +625,21 @@ def build_model_config(recognition_model=None, processor=None, cyrillic_recognit
         raise ValueError("At least one recognition model is required")
     return config
 
+
 def classify_and_recognize(
-    image_path, 
-    ordered_lines, 
-    classification_model, 
-    recognition_model, 
-    cyrillic_recognition_model, 
-    processor, 
+    image_path,
+    ordered_lines,
+    classification_model,
+    recognition_model,
+    cyrillic_recognition_model,
+    processor,
     cyrillic_processor,
     args
 ):
     """
     Classify detected text lines based on their script type (latin / cyrillic)
     and forward each line to correct text recognition model.
- 
+
     Any of recognition_model / cyrillic_recognition_model / classification_model may be None
     (see build_model_config / classify_or_skip).
 
@@ -634,22 +655,25 @@ def classify_and_recognize(
     # Get classification results
     # Recognizers that are None are simply unused. With exactly one recognizer,
     # pass classification_model=None: all lines go to it without classification.
-    model_config = build_model_config(recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
-    classification_results = classify_or_skip(cropped_lines, classification_model, model_config, args)
+    model_config = build_model_config(
+        recognition_model, processor, cyrillic_recognition_model, cyrillic_processor)
+    classification_results = classify_or_skip(
+        cropped_lines, classification_model, model_config, args)
     # Get text predictions
     text_predictions, trocr_model_name = get_text_predictions(
         classification_results,
         cropped_lines,
         line_polygons,
         img_line_confs,
-        model_config, 
+        model_config,
         args
     )
     if text_predictions:
         # Add page level stats to line level prediction results
         height, width = ordered_lines[0]['img_shape']
         image_name = Path(image_path).name
-        lines_dict = get_page_stats(text_predictions, image_name, height, width)
+        lines_dict = get_page_stats(
+            text_predictions, image_name, height, width)
         # Combine text region predictions with output data
         preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
         return preds, trocr_model_name
@@ -657,6 +681,7 @@ def classify_and_recognize(
         # No lines to transcribe (e.g. detection found regions but no
         # actual lines within them)
         return None, None
+
 
 def load_latin_recognizer(args, device):
     """Returns (recognition_model, processor). processor is None for PP-OCR."""
@@ -681,11 +706,13 @@ def load_latin_recognizer(args, device):
 # Device selection
 # ---------------------------------------------------------------------------
 
+
 def resolve_devices(args):
     """Return the list of device strings for model workers, one per worker process."""
     if args.device != "cuda" or not torch.cuda.is_available():
         if args.device == "cuda":
-            print("[warn] requested cuda but no CUDA device is available -- falling back to cpu")
+            print(
+                "[warn] requested cuda but no CUDA device is available -- falling back to cpu")
         return ["cpu"]
 
     n = torch.cuda.device_count()
@@ -728,7 +755,8 @@ def load_detection_model(args, device):
             det_unclip_ratio=args.paddle_det_unclip_ratio,
             enable_tensorrt=args.enable_tensorrt,
             trt_dynamic_shapes=not args.no_trt_dynamic_shapes,
-            det_trt_opt_shape=tuple(args.paddle_det_trt_opt_shape) if args.paddle_det_trt_opt_shape else None,
+            det_trt_opt_shape=tuple(
+                args.paddle_det_trt_opt_shape) if args.paddle_det_trt_opt_shape else None,
         )
     return load_rfdetr_model(
         args.detection_model_path,
@@ -736,6 +764,7 @@ def load_detection_model(args, device):
         batch_size=args.tile_batch_size if args.tile_size else 1,
         fp16=args.fp16_det,
     )
+
 
 def run_detection(detection_model, image_path, args):
     """
@@ -758,6 +787,7 @@ def run_detection(detection_model, image_path, args):
         tile_batch_size=args.tile_batch_size,
     )
 
+
 def postprocess_detection(detection_result, args):
     """CPU-worker part of segmentation: raw masks / polygons -> merged line/region polygons (the 7-tuple)."""
     # same filtering / merging thresholds for both backends
@@ -773,10 +803,12 @@ def postprocess_detection(detection_result, args):
     convert = raw_polygons_to_polygons if args.detector == "paddle" else masks_to_polygons
     return convert(*detection_result, **thresholds)
 
+
 def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
                                classification_model, model_config, args):
     """Pure model work: script classification + routing to the right HTR model."""
-    classification_results = classify_or_skip(cropped_lines, classification_model, model_config, args)
+    classification_results = classify_or_skip(
+        cropped_lines, classification_model, model_config, args)
 
     # Exception objects in fallback results aren't needed downstream; keep payloads picklable
     for r in classification_results:
@@ -800,7 +832,8 @@ def worker_specs(args, devices):
     """
     if args.split_workers:
         return [(d, (r,)) for d in devices for r in ("det", "rec")]
-    return [(d, ("rec", "det")) for d in devices]  # recognition first: finishes pages already in progress
+    # recognition first: finishes pages already in progress
+    return [(d, ("rec", "det")) for d in devices]
 
 
 def start_inference_workers(ctx, args, devices, queues, inference_results):
@@ -816,7 +849,8 @@ def start_inference_workers(ctx, args, devices, queues, inference_results):
 
 def stop_inference_workers(args, devices, workers, queues):
     for _, roles in worker_specs(args, devices):
-        queues[roles[0]].put(None)  # one stop signal per worker, in a queue it reads
+        # one stop signal per worker, in a queue it reads
+        queues[roles[0]].put(None)
     for q in queues.values():
         q.join()
     for w in workers:
@@ -852,7 +886,8 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
 
     if "rec" in roles:
         if latin_enabled(args):
-            recognition_model, processor = load_latin_recognizer(args, device_string)
+            recognition_model, processor = load_latin_recognizer(
+                args, device_string)
 
         if cyrillic_enabled(args):
             cyrillic_recognition_model, cyrillic_processor = load_trocr_model(
@@ -879,7 +914,8 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
             kind, request_id, payload = task
 
             if kind == "predict_polygons":
-                result = run_detection(detection_model, payload["image_path"], args)
+                result = run_detection(
+                    detection_model, payload["image_path"], args)
             elif kind == "classify_and_recognize":
                 result = run_classify_and_recognize(
                     payload["cropped_lines"], payload["line_polygons"],
@@ -891,7 +927,8 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
             inference_results[request_id] = {"ok": True, "result": result}
 
         except Exception:
-            inference_results[request_id] = {"ok": False, "error": traceback.format_exc()}
+            inference_results[request_id] = {
+                "ok": False, "error": traceback.format_exc()}
 
         finally:
             queues[role].task_done()
@@ -950,7 +987,8 @@ def predict_single_image(image_path):
     (line_polygons, line_confs, line_max_mins, region_polygons,
      region_confs, region_max_mins, image_shape) = postprocess_detection(detection_result, args)
 
-    line_preds = {'coords': line_polygons, 'max_min': line_max_mins, 'confs': line_confs}
+    line_preds = {'coords': line_polygons,
+                  'max_min': line_max_mins, 'confs': line_confs}
 
     if len(region_polygons) > 0:
         region_preds = [
@@ -963,7 +1001,8 @@ def predict_single_image(image_path):
         region_preds = get_default_region(image_shape=image_shape)
 
     lines_connected = get_line_regions(lines=line_preds, regions=region_preds)
-    ordered_lines = order_regions_lines(lines=lines_connected, regions=region_preds)
+    ordered_lines = order_regions_lines(
+        lines=lines_connected, regions=region_preds)
 
     if not ordered_lines:
         return None, None, "no lines/regions detected, skipping output"
@@ -986,17 +1025,20 @@ def predict_single_image(image_path):
         return None, None, "no transcribable lines found, skipping output"
 
     height, width = ordered_lines[0]['img_shape']
-    lines_dict = get_page_stats(text_predictions, Path(image_path).name, height, width)
+    lines_dict = get_page_stats(
+        text_predictions, Path(image_path).name, height, width)
     preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
 
     xml_input = XmlInput(
         image_path=image_path,
         page_xml=args.page_xml,
         alto_xml=args.alto_xml,
-        xml_path=os.path.dirname(image_path) if not args.xml_folder else args.xml_folder,
+        xml_path=os.path.dirname(
+            image_path) if not args.xml_folder else args.xml_folder,
         region_segment_model_name=args.region_model_name,
         line_segment_model_name=args.line_model_name,
-        classification_model_name=args.script_classification_model_name if classification_enabled(args) else None,
+        classification_model_name=args.script_classification_model_name if classification_enabled(
+            args) else None,
         text_recognition_model_name=htr_model_name,
     )
     return preds, xml_input, ""
@@ -1015,7 +1057,8 @@ def process_single_image(image_path):
         save_xml(preds, xml_input)
         if args.output_json:
             save_json_output(preds, image_path, args)
-        return image_path, "ok", sum(len(r["text_lines"]) for r in preds)  # n lines sent to recognition
+        # n lines sent to recognition
+        return image_path, "ok", sum(len(r["text_lines"]) for r in preds)
     except Exception:
         return image_path, "error", traceback.format_exc()
 
@@ -1027,7 +1070,8 @@ def process_single_image(image_path):
 def main(args):
     validate_args(args)
     devices = resolve_devices(args)
-    print(f"Model workers: {devices}" + (" (split: detection + recognition process each)" if args.split_workers else ""))
+    print(f"Model workers: {devices}" + (
+        " (split: detection + recognition process each)" if args.split_workers else ""))
 
     print('Find images in folder', str(args.input_folder))
     images = load_image_paths(args.input_folder)
@@ -1040,21 +1084,25 @@ def main(args):
     if args.cpu_processes:
         cpu_processes = args.cpu_processes
     elif devices == ["cpu"]:  # also using CPU for model inference
-        cpu_processes = max(1, physical // 2)   # leave cores for the CPU-side inference worker
+        # leave cores for the CPU-side inference worker
+        cpu_processes = max(1, physical // 2)
     else:
         cpu_processes = max(1, min(physical, 6 * n_model_workers))
     print(f"Starting {cpu_processes} CPU workers")
 
     ctx = get_context("spawn")  # required for CUDA
     manager = ctx.Manager()
-    queues = {role: manager.JoinableQueue(maxsize=args.inference_in_flight_limit) for role in ("det", "rec")}
+    queues = {role: manager.JoinableQueue(
+        maxsize=args.inference_in_flight_limit) for role in ("det", "rec")}
     inference_results = manager.dict()
     device_slots = manager.BoundedSemaphore(args.inference_in_flight_limit)
 
-    inference_workers = start_inference_workers(ctx, args, devices, queues, inference_results)
+    inference_workers = start_inference_workers(
+        ctx, args, devices, queues, inference_results)
 
     n_ok = n_err = 0
-    n_lines_timed = 0  # lines in images after the first (matches the timing window)
+    # lines in images after the first (matches the timing window)
+    n_lines_timed = 0
 
     start_time = None
     try:
@@ -1077,14 +1125,16 @@ def main(args):
                     tqdm.write(f"[info] {image_path}: {msg}")
                 else:
                     n_err += 1
-                    tqdm.write(f"[error] failed to process {image_path}:\n{msg}")
+                    tqdm.write(
+                        f"[error] failed to process {image_path}:\n{msg}")
     finally:
         # len-1 because we don't consider the first image
         if start_time is not None:
             elapsed = time.time() - start_time
             print(f"Images/s: {(len(images) - 1) / elapsed}")
             if n_lines_timed:
-                print(f"Lines: {n_lines_timed}, ms/line: {1000 * elapsed / n_lines_timed:.2f}")
+                print(
+                    f"Lines: {n_lines_timed}, ms/line: {1000 * elapsed / n_lines_timed:.2f}")
         stop_inference_workers(args, devices, inference_workers, queues)
 
     print(f'Processing finished: {n_ok} ok, {n_err} failed')

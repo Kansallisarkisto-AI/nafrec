@@ -64,12 +64,15 @@ class NAFRec:
         self._queues = {role: self._manager.JoinableQueue(maxsize=self.args.inference_in_flight_limit)
                         for role in ("det", "rec")}
         self._results = self._manager.dict()
-        self._slots = self._manager.BoundedSemaphore(self.args.inference_in_flight_limit)
+        self._slots = self._manager.BoundedSemaphore(
+            self.args.inference_in_flight_limit)
 
-        self._workers = start_inference_workers(ctx, self.args, self.devices, self._queues, self._results)
+        self._workers = start_inference_workers(
+            ctx, self.args, self.devices, self._queues, self._results)
         self._pool = ctx.Pool(
             processes=cpu_processes,
-            initializer=init_cpu_worker,  # init_cpu_worker will set the correct queues in _CPU_STATE
+            # init_cpu_worker will set the correct queues in _CPU_STATE
+            initializer=init_cpu_worker,
             initargs=(self.args, self._queues, self._results, self._slots),
         )
         self._closed = False
@@ -90,7 +93,8 @@ class NAFRec:
                 if type(e).__name__ != "TimeoutError":
                     raise
                 if not all(w.is_alive() for w in self._workers):
-                    raise RuntimeError("A model worker process died (see its traceback above)")
+                    raise RuntimeError(
+                        "A model worker process died (see its traceback above)")
 
     def process(self, image_path):
         """Process one image and block until done. Returns (preds, xml_input) or None."""
@@ -107,7 +111,8 @@ class NAFRec:
         self._closed = True
         self._pool.close()
         self._pool.join()
-        stop_inference_workers(self.args, self.devices, self._workers, self._queues)
+        stop_inference_workers(self.args, self.devices,
+                               self._workers, self._queues)
         self._manager.shutdown()
 
     def __enter__(self):

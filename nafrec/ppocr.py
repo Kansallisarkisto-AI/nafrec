@@ -43,9 +43,10 @@ def build_trt_profile(input_name, img_height, img_width_min, width_buckets, batc
     w_min = usable[0] if usable else img_width_min
     w_max = max(max_width, usable[-1] if usable else 0)
     if opt_width is None:
-        opt_width = usable[len(usable) // 2] if usable else min(max(img_width_min, 640), w_max)
+        opt_width = usable[len(
+            usable) // 2] if usable else min(max(img_width_min, 640), w_max)
     opt_width = min(max(int(opt_width), w_min), w_max)
-    mk = lambda n, w: f"{input_name}:{n}x{channels}x{img_height}x{w}"
+    def mk(n, w): return f"{input_name}:{n}x{channels}x{img_height}x{w}"
     return input_name, (mk(1, w_min), mk(batch_size, opt_width), mk(batch_size, w_max))
 
 
@@ -79,7 +80,8 @@ def onnx_input_specs(model_path):
     A dim is an int when static, otherwise None (symbolic name or unknown)."""
     import onnx
     m = onnx.load(model_path, load_external_data=False)
-    initializers = {i.name for i in m.graph.initializer}   # old exporters list weights as inputs too
+    # old exporters list weights as inputs too
+    initializers = {i.name for i in m.graph.initializer}
     specs = []
     for inp in m.graph.input:
         if inp.name in initializers:
@@ -144,7 +146,8 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
         if name in available:
             if name == "TensorrtExecutionProvider":
                 if enable_tensorrt:
-                    print(f"[info] using TensorRT" + (f" for {label}" if label else ""))
+                    print(f"[info] using TensorRT" +
+                          (f" for {label}" if label else ""))
                     trt_ep_options = {
                         "trt_fp16_enable": True if label == "ppocrv6" else False,
                         "trt_engine_cache_enable": True,
@@ -155,7 +158,8 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
                         "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
                         "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
                         "trt_ep_context_file_path": './',
-                        "trt_builder_optimization_level": 5,  # level 2 and lower would replace measurements with heuristics
+                        # level 2 and lower would replace measurements with heuristics
+                        "trt_builder_optimization_level": 5,
                         "device_id": device_id
                     }
                     if trt_profile is not None:
@@ -183,10 +187,12 @@ def _create_session(model_path, providers, options=None, fp16=False):
         import onnx
         from onnxconverter_common import float16
 
-        model = float16.convert_float_to_float16(onnx.load(model_path), keep_io_types=True)
+        model = float16.convert_float_to_float16(
+            onnx.load(model_path), keep_io_types=True)
         return ort.InferenceSession(model.SerializeToString(), providers=providers, sess_options=options)
     if fp16:
-        print(f"[info] fp16 ignored for {os.path.basename(model_path)}: not running on a GPU")
+        print(
+            f"[info] fp16 ignored for {os.path.basename(model_path)}: not running on a GPU")
     return ort.InferenceSession(model_path, providers=providers, sess_options=options)
 
 
@@ -209,12 +215,15 @@ class PPOCRRecognizer:
         if enable_tensorrt and trt_dynamic_shapes and str(device).startswith("cuda"):
             trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
                                             width_buckets, batch_size, opt_width=trt_opt_width)
-            print(f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
-        providers, options = _get_providers_and_options(device, trt_profile, enable_tensorrt, label="ppocrv6")
+            print(
+                f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
+        providers, options = _get_providers_and_options(
+            device, trt_profile, enable_tensorrt, label="ppocrv6")
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
-        self.pre = RecPreProcess(rec_image_shape=(3, img_height, img_width_min), width_buckets=width_buckets)
+        self.pre = RecPreProcess(rec_image_shape=(
+            3, img_height, img_width_min), width_buckets=width_buckets)
         self.post = CTCLabelDecode(char_dict_path)
 
         # PaddleOCR appends a trailing space class when Global.use_space_char=true
@@ -250,7 +259,8 @@ class PPOCRRecognizer:
         for i, img in enumerate(line_images_rgb):
             if img is None or img.ndim != 3 or img.shape[0] == 0 or img.shape[1] == 0:
                 continue  # degenerate crop -> empty text
-            valid.append((i, cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2BGR)))
+            valid.append(
+                (i, cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2BGR)))
 
         # Sort by aspect ratio so batches have similar widths (less padding)
         valid.sort(key=lambda t: t[1].shape[1] / float(t[1].shape[0]))
@@ -262,15 +272,19 @@ class PPOCRRecognizer:
             try:
                 t, s = self._recognize_batch(imgs)
             except Exception as e:
-                print(f"[warn] PP-OCR batch failed ({e}) -- retrying its lines individually")
+                print(
+                    f"[warn] PP-OCR batch failed ({e}) -- retrying its lines individually")
                 t, s = [], []
                 for im in imgs:
                     try:
                         ti, si = self._recognize_batch([im])
-                        t.extend(ti); s.extend(si)
+                        t.extend(ti)
+                        s.extend(si)
                     except Exception as line_e:
-                        print(f"[warn] line also failed individually, inserting empty placeholder: {line_e}")
-                        t.append(""); s.append(0.0)
+                        print(
+                            f"[warn] line also failed individually, inserting empty placeholder: {line_e}")
+                        t.append("")
+                        s.append(0.0)
             for i, ti, si in zip(idxs, t, s):
                 texts[i], scores[i] = ti, float(si)
         return scores, texts

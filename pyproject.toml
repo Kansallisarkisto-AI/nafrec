@@ -9,49 +9,51 @@ description = "An HTR and OCR pipeline for historical text recognition, which op
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "beautifulsoup4>=4.14.2",
-    "langdetect>=1.0.9",
-    "lxml>=6.0.2",
-    "numpy>=1.24.3",
-    "opencv-python-headless>=4.8.1.78",
-    "pillow>=9.5.0",
-    "pydantic>=2.6.1",
-    "rfdetr>=1.11.2",
-    "shapely>=2.0.6",
-    "psutil>=5.9",
-    "tqdm",
-    "torch>=2.4.0",
-    "transformers==5.10.4",
-    "yattag>=1.16.1",
-    "supervision>=0.30.9",
-    "huggingface-hub>=1.19.0",
-    "onnx",
-    "onnxconverter-common>=1.14",  # runtime fp16 conversion (--fp16_rec/--fp16_det)
-    "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
+  "beautifulsoup4>=4.14.2",
+  "langdetect>=1.0.9",
+  "lxml>=6.0.2",
+  "numpy>=1.24.3",
+  "opencv-python-headless>=4.8.1.78",
+  "pillow>=9.5.0",
+  "pydantic>=2.6.1",
+  "rfdetr>=1.11.2",
+  "shapely>=2.0.6",
+  "psutil>=5.9",
+  "tqdm",
+  "torch>=2.4.0",
+  "transformers==5.10.4",
+  "yattag>=1.16.1",
+  "supervision>=0.30.9",
+  "huggingface-hub>=1.19.0",
+  "onnx",
+  "onnxconverter-common>=1.14",                                               # runtime fp16 conversion (--fp16_rec/--fp16_det)
+  "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
 ]
 
 authors = [
-  {name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi"},
-  {name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi"},
-  {name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi"},
+  { name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi" },
+  { name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi" },
+  { name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi" },
 ]
 maintainers = [
-  {name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi"},
-  {name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi"},
-  {name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi"}
+  { name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi" },
+  { name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi" },
+  { name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi" },
 ]
 license = "Apache-2.0"
 license-files = ["LICEN[CS]E.*"]
 keywords = ["document understanding", "handwriting recognition", "ocr", "htr"]
-classifiers = [
-  "Programming Language :: Python"
-]
+classifiers = ["Programming Language :: Python"]
 
 [project.optional-dependencies]
 cpu = ["onnxruntime>=1.18"]
 cpu-openvino = ["onnxruntime-openvino>=1.18"]
 gpu = ["onnxruntime-gpu>=1.18"]
-gpu-optimum = ["onnxruntime-gpu>=1.18", "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@xadupre/transformers5", "optimum"]
+gpu-optimum = [
+  "onnxruntime-gpu>=1.18",
+  "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@xadupre/transformers5",
+  "optimum",
+]
 
 [project.urls]
 Homepage = "https://github.com/Kansallisarkisto-AI/nafrec"
@@ -64,9 +66,7 @@ nafrec = "nafrec:main.entrypoint"
 
 # Don't try to satisfy both extras at once (they provide the same module).
 [tool.uv]
-conflicts = [
-    [{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }],
-]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }]]
 
 [tool.hatch.metadata]
 allow-direct-references = true

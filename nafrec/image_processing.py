@@ -4,6 +4,7 @@ from torchvision.transforms import v2 as transforms_v2
 import torch
 import cv2
 
+
 def load_with_torchvision(img_path):
     """
     Load an image using torchvision and convert to numpy array.
@@ -15,10 +16,11 @@ def load_with_torchvision(img_path):
         numpy.ndarray: Image array in RGB format with shape (H, W, C)
     """
     # Read as tensor
-    img_tensor = read_image(str(img_path), mode= ImageReadMode.RGB)
+    img_tensor = read_image(str(img_path), mode=ImageReadMode.RGB)
     # Convert to numpy: (C, H, W) -> (H, W, C)
     img_np = img_tensor.permute(1, 2, 0).numpy()
     return img_np
+
 
 def preprocess_resize_smallerof_wh_torch_transform(image, max_size=1024, normalize=True):
     """
@@ -70,6 +72,7 @@ def preprocess_resize_smallerof_wh_torch_transform(image, max_size=1024, normali
 
     return resized
 
+
 def preprocess_resize_torch_transform(image, max_size=1024, normalize=True):
     """
     Resize using torchvision.transforms.v2 (most concise, PyTorch only).
@@ -88,14 +91,16 @@ def preprocess_resize_torch_transform(image, max_size=1024, normalize=True):
         if image.ndim == 3 and image.shape[2] in [1, 3]:
             image = image.permute(2, 0, 1)
 
-    c, h, w = image.shape if isinstance(image, torch.Tensor) else (None, *image.size[::-1])
+    c, h, w = image.shape if isinstance(
+        image, torch.Tensor) else (None, *image.size[::-1])
 
     # Build transform pipeline
     transform_list = []
 
     # Add resize if needed
     if h > max_size or w > max_size:
-        transform_list.append(transforms_v2.Resize(size=None, max_size=max_size, antialias=True))
+        transform_list.append(transforms_v2.Resize(
+            size=None, max_size=max_size, antialias=True))
 
     # Add normalization
     if normalize:
@@ -110,16 +115,18 @@ def preprocess_resize_torch_transform(image, max_size=1024, normalize=True):
 
     return resized
 
+
 def upscale_mask_opencv(mask, bbox, upscaled_bbox_shape):
     """Upscale using OpenCV resize with nearest neighbor."""
     x1, y1, x2, y2 = map(int, bbox)
     cropped_mask = mask[y1:y2, x1:x2]
     mask_uint8 = cropped_mask.astype(np.uint8)
-    upscaled = cv2.resize(mask_uint8, 
-                         upscaled_bbox_shape, 
-                         interpolation=cv2.INTER_NEAREST)
+    upscaled = cv2.resize(mask_uint8,
+                          upscaled_bbox_shape,
+                          interpolation=cv2.INTER_NEAREST)
 
     return upscaled * 255
+
 
 def upscale_bbox(bbox, original_shape, mask_shape):
     """
@@ -181,6 +188,7 @@ def upscale_bbox(bbox, original_shape, mask_shape):
 
     return bbox_scaled
 
+
 def crop_line(image, polygon):
     """Crops predicted text line based on the polygon coordinates
     and returns pasted text line image with white background.
@@ -192,22 +200,27 @@ def crop_line(image, polygon):
     Returns:
         numpy.ndarray: Cropped text line image with white background around polygon.
     """
-    polygon = np.array([[int(lst[0]), int(lst[1])] for lst in polygon], dtype=np.int32)
+    polygon = np.array([[int(lst[0]), int(lst[1])]
+                       for lst in polygon], dtype=np.int32)
     rect = cv2.boundingRect(polygon)
-    cropped_image = image[rect[1]: rect[1] + rect[3], rect[0]: rect[0] + rect[2]]
-    mask = np.zeros([cropped_image.shape[0], cropped_image.shape[1]], dtype=np.uint8)
-    cv2.drawContours(mask, [polygon- np.array([[rect[0],rect[1]]])], -1, (255, 255, 255), -1, cv2.LINE_AA)
-    res = cv2.bitwise_and(cropped_image, cropped_image, mask = mask)
+    cropped_image = image[rect[1]: rect[1] +
+                          rect[3], rect[0]: rect[0] + rect[2]]
+    mask = np.zeros(
+        [cropped_image.shape[0], cropped_image.shape[1]], dtype=np.uint8)
+    cv2.drawContours(mask, [
+                     polygon - np.array([[rect[0], rect[1]]])], -1, (255, 255, 255), -1, cv2.LINE_AA)
+    res = cv2.bitwise_and(cropped_image, cropped_image, mask=mask)
     wbg = np.ones_like(cropped_image, np.uint8)*255
-    cv2.bitwise_not(wbg,wbg, mask=mask)
+    cv2.bitwise_not(wbg, wbg, mask=mask)
     # Overlap the resulted cropped image on the white background
     dst = wbg+res
     return dst
 
+
 def crop_lines(polygons, image):
     """Returns a list of line images cropped following the 
     detected polygon coordinates.
-    
+
     Crop multiple text lines from an image based on polygon coordinates.
 
     Args:

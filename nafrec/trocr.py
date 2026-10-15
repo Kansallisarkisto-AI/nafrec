@@ -8,12 +8,14 @@ from .ppocr import _get_providers_and_options
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+
 class TrOCRProcessorCustom(TrOCRProcessor):
     def __init__(self, image_processor, tokenizer):
         self.image_processor = image_processor
         self.tokenizer = tokenizer
         self.current_processor = self.image_processor
         self.chat_template = None
+
 
 def load_trocr_model(model_path, processor_path, device='cuda', revision="main", fp16=False):
     """
@@ -36,21 +38,21 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
     model_dtype = torch.float16 if use_fp16 else torch.float32
     # Store original
     original_embeddings_forward = ViTEmbeddings.forward
-    
+
     # Always apply patches for models saved with custom image sizes
     def universal_patch_forward(self, *args, **kwargs):
         pixel_values = args[0] if args else kwargs['pixel_values']
         embeddings = self.projection(pixel_values).flatten(2).transpose(1, 2)
         return embeddings
-    
+
     def universal_embeddings_forward(self, *args, **kwargs):
         kwargs['interpolate_pos_encoding'] = True
         return original_embeddings_forward(self, *args, **kwargs)
-    
+
     # Apply patches
     ViTPatchEmbeddings.forward = universal_patch_forward
     ViTEmbeddings.forward = universal_embeddings_forward
-    
+
     # Load model and processor
     try:
         from optimum.onnxruntime import ORTModelForVision2Seq
@@ -66,18 +68,20 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
 
         if len(onnx_files) == 0:
             raise Exception("Zero onnx files")
-        
+
         # Same provider / session-option selection as PP-OCR (CUDA device_id, OpenVINO, CPU threads, ...).
         # optimum wants provider names and their options as two separate lists.
-        providers, session_options = _get_providers_and_options(resolved_device, label="trocr", enable_tensorrt=False)
+        providers, session_options = _get_providers_and_options(
+            resolved_device, label="trocr", enable_tensorrt=False)
         model = ORTModelForVision2Seq.from_pretrained(
             model_path,
             revision=revision,
             providers=[p[0] if isinstance(p, tuple) else p for p in providers],
-            provider_options=[p[1] if isinstance(p, tuple) else {} for p in providers],
+            provider_options=[p[1] if isinstance(
+                p, tuple) else {} for p in providers],
             session_options=session_options,
             use_cache=True,  # Check later for cyrillic model
-            use_merged=False, # use_merged is buggy
+            use_merged=False,  # use_merged is buggy
             use_io_binding=True
         )
 
@@ -87,33 +91,34 @@ def load_trocr_model(model_path, processor_path, device='cuda', revision="main",
         model.is_remote_code = nope
 
         # something is causing issues with io binding and the kv cache branch in the decoder
-        #model.decoder.use_io_binding = False
+        # model.decoder.use_io_binding = False
         print(f"[info] onnx trocr model loaded on {model.device}")
     except Exception as e:
-        #print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
+        # print(f"[info] onnx trocr model not used ({type(e).__name__}: {e})")
         model = VisionEncoderDecoderModel.from_pretrained(
-                                                        model_path,
-                                                        torch_dtype=model_dtype,
-                                                        revision=revision
-                                                    ).to(resolved_device)
+            model_path,
+            torch_dtype=model_dtype,
+            revision=revision
+        ).to(resolved_device)
         print("[info] regular trocr model loaded")
 
     if model.config.encoder.model_type == "dinov2":
-        processor = TrOCRProcessorCustom.from_pretrained(processor_path, revision=revision)
+        processor = TrOCRProcessorCustom.from_pretrained(
+            processor_path, revision=revision)
     elif "microsoft" in processor_path.lower():
         processor = TrOCRProcessor.from_pretrained(processor_path,
-                                        backend="torchvision",
-                                        revision=revision)
-        
+                                                   backend="torchvision",
+                                                   revision=revision)
+
     else:
         processor = TrOCRProcessor.from_pretrained(processor_path,
-                                                backend="torchvision",
-                                                do_resize=True,
-                                                revision=revision)
+                                                   backend="torchvision",
+                                                   do_resize=True,
+                                                   revision=revision)
 
         # these models (non-dinov2/cyrillic) are able to use the kv cache
         model.generation_config.use_cache = True
-    
+
     return model, processor
 
 
@@ -137,11 +142,13 @@ def predict_text(cropped_lines, recognition_model, processor):
     dtype = recognition_model.dtype
 
     pixel_values = processor(cropped_lines, return_tensors="pt").pixel_values
-    generated_dict = recognition_model.generate(pixel_values.to(device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True)
+    generated_dict = recognition_model.generate(pixel_values.to(
+        device, dtype=dtype), max_new_tokens=128, max_length=None, return_dict_in_generate=True, output_scores=True)
     generated_ids = generated_dict['sequences']
     generated_scores = generated_dict['scores']
 
-    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+    generated_text = processor.batch_decode(
+        generated_ids, skip_special_tokens=True)
 
     # Works for both:
     # - greedy decoding: num_beams=1
@@ -219,18 +226,21 @@ def get_text_lines(cropped_lines, batch_size, recognition_model, processor):
             sc, gt = [], []
             for line in batch:
                 try:
-                    line_sc, line_gt = predict_text([line], recognition_model, processor)
+                    line_sc, line_gt = predict_text(
+                        [line], recognition_model, processor)
                     sc.extend(line_sc)
                     gt.extend(line_gt)
                 except Exception as line_e:
-                    print(f"[warn] line also failed individually, inserting empty placeholder: {line_e}")
+                    print(
+                        f"[warn] line also failed individually, inserting empty placeholder: {line_e}")
                     sc.append(0.0)
                     gt.append("")
- 
+
         scores += sc
         generated_text += gt
- 
+
     return scores, generated_text
+
 
 def get_line_dicts(polygons, generated_text, line_confs, scores):
     """
@@ -254,14 +264,15 @@ def get_line_dicts(polygons, generated_text, line_confs, scores):
     for i in range(len(generated_text)):
         row_length = len(generated_text[i])
         line_dict = {
-            'polygon': polygons[i], 
-            'text': generated_text[i], 
-            'conf': line_confs[i], 
-            'text_conf':scores[i], 
+            'polygon': polygons[i],
+            'text': generated_text[i],
+            'conf': line_confs[i],
+            'text_conf': scores[i],
             'row_length': row_length
         }
         line_dicts.append(line_dict)
     return line_dicts
+
 
 def get_text_preds(data, recognition_model, processor):
     """
@@ -285,7 +296,9 @@ def get_text_preds(data, recognition_model, processor):
             - row_length (int): Character count of the text.
     """
     # Get text predictions
-    scores, generated_text = get_text_lines(data.line_images, data.batch_size, recognition_model, processor)
+    scores, generated_text = get_text_lines(
+        data.line_images, data.batch_size, recognition_model, processor)
     # Get results in dictionary form
-    line_dicts = get_line_dicts(data.line_polygons, generated_text, data.line_confs, scores)
+    line_dicts = get_line_dicts(
+        data.line_polygons, generated_text, data.line_confs, scores)
     return line_dicts

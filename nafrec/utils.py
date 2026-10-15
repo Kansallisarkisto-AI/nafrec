@@ -11,40 +11,45 @@ from .reading_order_graph import GraphBasedOrdering
 
 graph_order_poly = GraphBasedOrdering()
 
+
 def load_image_paths(input_folder, extensions=None):
     """
     Load image files from a folder.
-    
+
     Args:
         input_folder: Path to the folder containing images
         extensions: List of file extensions to include (default: common image formats)
-    
+
     Returns:
         List of image file paths
     """
     if extensions is None:
-        extensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp']
-    
+        extensions = ['jpg', 'jpeg', 'png',
+                      'gif', 'bmp', 'tiff', 'tif', 'webp']
+
     images = []
     for ext in extensions:
         # Add both lowercase and uppercase versions
         images.extend(glob.glob(os.path.join(input_folder, f'*.{ext}')))
-        images.extend(glob.glob(os.path.join(input_folder, f'*.{ext.upper()}')))
-    
+        images.extend(glob.glob(os.path.join(
+            input_folder, f'*.{ext.upper()}')))
+
     return sorted(images)
+
 
 def get_default_region(image_shape):
     """Function for creating a default region if no regions are detected."""
     h, w = image_shape  # image_shape is (height, width)
     region = {'region_coords': [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
-            'coords': [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
-            'max_min': [0.0, 0.0, w, h], 
-            #'class': '1',  tämä lienee turha. ei käytetä get_line_regions tai order_regions_lines funktioissa
-            'region_name': "paragraph", 
-            'region_conf': 0.0,
-            'id': '0', 
-            'img_shape': (h, w)}
+              'coords': [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]],
+              'max_min': [0.0, 0.0, w, h],
+              # 'class': '1',  tämä lienee turha. ei käytetä get_line_regions tai order_regions_lines funktioissa
+              'region_name': "paragraph",
+              'region_conf': 0.0,
+              'id': '0',
+              'img_shape': (h, w)}
     return [region]
+
 
 def get_dist(line_polygon, regions):
     """Function for finding the closest region to the text line."""
@@ -61,6 +66,7 @@ def get_dist(line_polygon, regions):
                     reg_id = region['id']
     return reg_id
 
+
 def validate_polygon(polygon):
     """"Function for testing and correcting the validity of polygons."""
     if len(polygon) > 2:
@@ -70,6 +76,7 @@ def validate_polygon(polygon):
         return polygon
     else:
         return None
+
 
 def get_iou(poly1, poly2):
     """Function for calculating Intersection over Union (IoU) values."""
@@ -87,9 +94,10 @@ def get_iou(poly1, poly2):
             iou = intersect / uni.area
     return iou
 
+
 def get_line_regions(lines, regions):
     """Function for connecting each text line to one region.
-    
+
     Docstring generated with Claude
     Connect each text line to a region based on intersection or distance.
 
@@ -116,28 +124,30 @@ def get_line_regions(lines, regions):
         max_min = [0.0, 0.0, 0.0, 0.0]
         polygon = lines['coords'][i]
         for region in regions:
-            line_reg_iou = get_iou(polygon, region['coords']) 
+            line_reg_iou = get_iou(polygon, region['coords'])
             if line_reg_iou > iou:
                 iou = line_reg_iou
                 reg_id = region['id']
-        # If line polygon does not intersect with any region, a distance metric is used for defining 
+        # If line polygon does not intersect with any region, a distance metric is used for defining
         # the region that the line belongs to
         if iou == 0:
             reg_id = get_dist(polygon, regions)
 
         if (len(lines['max_min']) - 1) >= i:
             max_min = lines['max_min'][i]
-       
+
         if (len(lines['confs']) - 1) >= i:
             conf = lines['confs'][i]
 
-        new_line = {'polygon': polygon, 'reg_id': reg_id, 'max_min': max_min, 'conf': conf}
+        new_line = {'polygon': polygon, 'reg_id': reg_id,
+                    'max_min': max_min, 'conf': conf}
         lines_list.append(new_line)
     return lines_list
 
+
 def order_regions_lines(lines, regions):
     """Function for ordering line predictions inside each region.
-    
+
     Docstring generated with Claude
     Order text lines within each region and order the regions themselves.
 
@@ -163,7 +173,7 @@ def order_regions_lines(lines, regions):
             - 'line_confs': Ordered list of line confidence scores
             - 'region_conf': Region confidence score
             - 'img_shape': Shape of the source image
-        
+
         Note: Only regions containing at least one line are included in the output.
         Both lines within regions and regions themselves are ordered by their spatial positions.
     """
@@ -184,12 +194,12 @@ def order_regions_lines(lines, regions):
             line_order = graph_order_poly.order(line_max_mins)
             line_polygons = [line_polygons[i] for i in line_order]
             line_confs = [line_confs[i] for i in line_order]
-            new_region = {'region_coords': region.get('coords', region.get('region_coords', None)), 
-                        'region_name': region.get('name', region.get('region_name', None)), 
-                        'lines': line_polygons, 
-                        'line_confs': line_confs,
-                        'region_conf': region.get('conf', region.get('region_conf', None)),
-                        'img_shape': region['img_shape']}
+            new_region = {'region_coords': region.get('coords', region.get('region_coords', None)),
+                          'region_name': region.get('name', region.get('region_name', None)),
+                          'lines': line_polygons,
+                          'line_confs': line_confs,
+                          'region_conf': region.get('conf', region.get('region_conf', None)),
+                          'img_shape': region['img_shape']}
             region_max_mins.append(region['max_min'])
             regions_with_rows.append(new_region)
         else:
@@ -198,6 +208,7 @@ def order_regions_lines(lines, regions):
     region_order = graph_order_poly.order(region_max_mins)
     regions_with_rows = [regions_with_rows[i] for i in region_order]
     return regions_with_rows
+
 
 def flatten_lines(segment_predictions):
     """
@@ -227,6 +238,7 @@ def flatten_lines(segment_predictions):
         n_lines.append(len(region['lines']))
     return img_lines, img_line_confs, n_lines
 
+
 def detect_language(text_lines):
     """
     Detect the language of text from multiple text lines.
@@ -242,6 +254,7 @@ def detect_language(text_lines):
         return detect(combined_text)
     except:
         return "unknown"
+
 
 def get_page_stats(line_dicts, image_name, height, width):
     """
@@ -260,18 +273,19 @@ def get_page_stats(line_dicts, image_name, height, width):
     # Detect the language of the text
     language = detect_language(generated_text)
     lines_dict = {
-        'img_name': image_name, 
-        'height': height, 
-        'width': width, 
-        'page_conf_mean': page_conf_mean, 
-        'page_conf_median': page_conf_median, 
-        'page_conf_25': page_conf_25, 
-        'page_conf_75':page_conf_75, 
-        'n_long_rowtext': n_long_rowtext, 
-        'language': language, 
+        'img_name': image_name,
+        'height': height,
+        'width': width,
+        'page_conf_mean': page_conf_mean,
+        'page_conf_median': page_conf_median,
+        'page_conf_25': page_conf_25,
+        'page_conf_75': page_conf_75,
+        'n_long_rowtext': n_long_rowtext,
+        'language': language,
         'text_lines': line_dicts
     }
     return lines_dict
+
 
 def process_text_predictions(text_predictions, segment_predictions, n_lines):
     lines_dicts = text_predictions['text_lines']
@@ -281,8 +295,8 @@ def process_text_predictions(text_predictions, segment_predictions, n_lines):
         region_lines_dicts = lines_dicts[:n_region_lines]
         lines_dicts = lines_dicts[n_region_lines:]
         # Combine page data and region specific data
-        region_lines = {'img_name': text_predictions['img_name'], 
-                        'height': text_predictions['height'], 
+        region_lines = {'img_name': text_predictions['img_name'],
+                        'height': text_predictions['height'],
                         'width': text_predictions['width'],
                         'page_conf_mean':  text_predictions['page_conf_mean'],
                         'page_conf_median': text_predictions['page_conf_median'],
@@ -298,6 +312,7 @@ def process_text_predictions(text_predictions, segment_predictions, n_lines):
         regions.append(region_lines)
     return regions
 
+
 def save_json_output(data, image_path, args):
     """Save pipeline output for each image in json format."""
     class NumpyJSONEncoder(json.JSONEncoder):
@@ -307,6 +322,7 @@ def save_json_output(data, image_path, args):
         - numpy scalar types (np.int64, np.float32, np.bool)
         numbers) -> their native Python equivalents
         """
+
         def default(self, obj):
             if isinstance(obj, np.ndarray):
                 return obj.tolist()
@@ -327,4 +343,5 @@ def save_json_output(data, image_path, args):
     os.makedirs(save_folder, exist_ok=True)
     save_path = str(Path(save_folder, json_name))
     with open(save_path, 'w', encoding='utf8') as json_file:
-        json.dump(data, json_file, ensure_ascii=False, cls=NumpyJSONEncoder, indent=2)
+        json.dump(data, json_file, ensure_ascii=False,
+                  cls=NumpyJSONEncoder, indent=2)

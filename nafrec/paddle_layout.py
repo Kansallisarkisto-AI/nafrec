@@ -83,7 +83,8 @@ def det_side_bounds(limit_side_len, limit_type, max_side_limit):
       * either side can be as small as 32 (tiny / extreme-aspect-ratio images)
     The rounding is monotonic, so rounding the bound gives the exact upper limit.
     """
-    cap = min(limit_side_len, max_side_limit) if limit_type == "max" else max_side_limit
+    cap = min(limit_side_len,
+              max_side_limit) if limit_type == "max" else max_side_limit
     return DET_STRIDE, _round_side(cap)
 
 
@@ -109,12 +110,14 @@ def build_trt_det_profile(input_spec, limit_side_len, limit_type, max_side_limit
     """
     name, dims = input_spec
     if len(dims) != 4:
-        raise ValueError(f"det input '{name}' has rank {len(dims)}, expected 4 (N, C, H, W)")
+        raise ValueError(
+            f"det input '{name}' has rank {len(dims)}, expected 4 (N, C, H, W)")
     if all(d is not None for d in dims):
         return None
 
     lo, hi = det_side_bounds(limit_side_len, limit_type, max_side_limit)
-    opt_h, opt_w = opt_shape if opt_shape else default_det_opt_shape(limit_side_len, limit_type, max_side_limit)
+    opt_h, opt_w = opt_shape if opt_shape else default_det_opt_shape(
+        limit_side_len, limit_type, max_side_limit)
     opt_h, opt_w = (min(max(_round_side(v), lo), hi) for v in (opt_h, opt_w))
 
     def shape(h, w):
@@ -146,7 +149,8 @@ def build_trt_layout_profile(input_specs, in_h, in_w):
             elif len(dims) == 4 and axis in (1, 2, 3):
                 fixed.append((3, in_h, in_w)[axis - 1])
             else:
-                raise ValueError(f"cannot infer dynamic dimension {axis} of layout input '{name}' {dims}")
+                raise ValueError(
+                    f"cannot infer dynamic dimension {axis} of layout input '{name}' {dims}")
         shapes[name] = (tuple(fixed),) * 3
     return format_trt_profile(shapes) if shapes else None
 
@@ -183,7 +187,8 @@ class PaddleLayoutDetector:
         # TensorRT: per-model providers because each model gets its own shape profile and
         # cache folder. Without a profile the TensorRT EP rebuilds an engine for every new
         # input shape, so dynamic shapes matter (see build_trt_*_profile).
-        use_trt_profiles = enable_tensorrt and trt_dynamic_shapes and str(device).startswith("cuda")
+        use_trt_profiles = enable_tensorrt and trt_dynamic_shapes and str(
+            device).startswith("cuda")
 
         # ---- layout model (optional: without it there are no regions and nafrec
         # falls back to one full-page region) ----
@@ -191,15 +196,20 @@ class PaddleLayoutDetector:
         if layout_model_path:
             layout_profile = None
             if use_trt_profiles:
-                layout_profile = self._layout_trt_profile(layout_model_path, layout_input_size)
+                layout_profile = self._layout_trt_profile(
+                    layout_model_path, layout_input_size)
             providers, options = _get_providers_and_options(
                 device, layout_profile, enable_tensorrt, trt_cache_subdir="layout", label="layout model")
-            self.layout = _create_session(layout_model_path, providers, options)  # ignore fp16 here due to incompatibility
+            # ignore fp16 here due to incompatibility
+            self.layout = _create_session(
+                layout_model_path, providers, options)
             inputs = {i.name: i for i in self.layout.get_inputs()}
-            self._img_name = _pick_image_input([(n, i.shape) for n, i in inputs.items()])
+            self._img_name = _pick_image_input(
+                [(n, i.shape) for n, i in inputs.items()])
             self._has_im_shape = "im_shape" in inputs
             self._has_scale_factor = "scale_factor" in inputs
-            self._in_h, self._in_w = _resolve_layout_hw(inputs[self._img_name].shape, layout_input_size)
+            self._in_h, self._in_w = _resolve_layout_hw(
+                inputs[self._img_name].shape, layout_input_size)
         self._mean = np.asarray(layout_mean, dtype=np.float32)
         self._std = np.asarray(layout_std, dtype=np.float32)
         self.layout_threshold = layout_threshold
@@ -229,7 +239,8 @@ class PaddleLayoutDetector:
                                                 det_max_side_limit, det_trt_opt_shape)
         det_providers, _ = _get_providers_and_options(
             device, det_profile, enable_tensorrt, trt_cache_subdir="det", label="text detection model")
-        self.det = _create_session(det_model_path, det_providers)  # ignore fp16 here due to incompatibility
+        # ignore fp16 here due to incompatibility
+        self.det = _create_session(det_model_path, det_providers)
         self._det_input = self.det.get_inputs()[0].name
         self._det_pre = DetPreProcess(
             limit_side_len=det_limit_side_len,
@@ -249,7 +260,8 @@ class PaddleLayoutDetector:
         try:
             specs = onnx_input_specs(model_path)
             img_shape = dict(specs)[_pick_image_input(specs)]
-            in_h, in_w = _resolve_layout_hw(img_shape, layout_input_size, warn=False)
+            in_h, in_w = _resolve_layout_hw(
+                img_shape, layout_input_size, warn=False)
             profile = build_trt_layout_profile(specs, in_h, in_w)
         except Exception as e:
             print(f"[warn] could not build a TensorRT shape profile for the layout model ({e}) -- "
@@ -281,7 +293,8 @@ class PaddleLayoutDetector:
         h, w = img_bgr.shape[:2]
         ih, iw = self._in_h, self._in_w
 
-        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # Paddle models expect RGB
+        # Paddle models expect RGB
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (iw, ih), interpolation=cv2.INTER_CUBIC)
         x = (resized.astype(np.float32) / 255.0 - self._mean) / self._std
         x = np.ascontiguousarray(x.transpose(2, 0, 1)[None], dtype=np.float32)
@@ -290,12 +303,14 @@ class PaddleLayoutDetector:
         if self._has_im_shape:
             feed["im_shape"] = np.array([[ih, iw]], dtype=np.float32)
         if self._has_scale_factor:
-            feed["scale_factor"] = np.array([[ih / h, iw / w]], dtype=np.float32)
+            feed["scale_factor"] = np.array(
+                [[ih / h, iw / w]], dtype=np.float32)
         outs = self.layout.run(None, feed)
 
         # detections: (n, 6) = [class_id, score, x1, y1, x2, y2]; an optional second
         # output holds the number of valid rows.
-        dets = next((np.asarray(o) for o in outs if np.ndim(o) == 2 and np.shape(o)[1] == 6), None)
+        dets = next((np.asarray(o) for o in outs if np.ndim(o)
+                    == 2 and np.shape(o)[1] == 6), None)
         if dets is None:
             raise RuntimeError(
                 "Unrecognized layout model output: expected an (N, 6) array "
@@ -321,7 +336,8 @@ class PaddleLayoutDetector:
     def _detect_lines(self, img_bgr):
         x, shape = self._det_pre(img_bgr)
         pred = self.det.run(None, {self._det_input: x})[0]
-        boxes, scores = self._det_post(pred, shape)  # (N, 4, 2) int16 in original pixels
+        # (N, 4, 2) int16 in original pixels
+        boxes, scores = self._det_post(pred, shape)
         return boxes, scores
 
     # ------------------------------------------------------------------
@@ -352,7 +368,8 @@ class PaddleLayoutDetector:
         region_polygons, region_confs = [], []
         for _, score, x1, y1, x2, y2 in kept:
             x1, y1, x2, y2 = (int(round(v)) for v in (x1, y1, x2, y2))
-            region_polygons.append(np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=int))
+            region_polygons.append(
+                np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=int))
             region_confs.append(score)
 
         def inside(cx, cy, boxes):
@@ -391,7 +408,8 @@ class PaddleLayoutDetector:
         """
         from .seg_inference import raw_polygons_to_polygons
 
-        line_polygons, line_confs, region_polygons, region_confs, image_shape = self.predict_raw(image_path)
+        line_polygons, line_confs, region_polygons, region_confs, image_shape = self.predict_raw(
+            image_path)
         return raw_polygons_to_polygons(
             line_polygons, line_confs, region_polygons, region_confs, image_shape,
             line_percentage_threshold=line_percentage_threshold,
