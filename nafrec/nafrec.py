@@ -21,6 +21,12 @@ Example:
                 get_xml(preds, xml_input)                        # from nafrec.xml_output
             fut = rec.submit("page2.jpg")                        # non-blocking
             results = rec.process_many(["a.jpg", "b.jpg"])       # parallel, input order
+
+For callers with their own CPU processes (e.g. SfRD), NAFRec(cpu_pool=False, ...) starts only the
+model workers. Pass the NAFRec object itself to those processes (it pickles as a lightweight handle
+to the model workers) and call the building blocks of process() there:
+    lines = handle.detect("page.jpg")                  # 7-tuple of raw line / region polygons
+    preds, model_name = handle.recognize("page.jpg", ordered_lines)   # or None
 """
 import os
 from multiprocessing import get_context
@@ -29,7 +35,8 @@ import psutil
 
 from .main import (make_args, validate_args, resolve_devices,
                    start_inference_workers, stop_inference_workers,
-                   init_cpu_worker, predict_single_image)
+                   init_cpu_worker, predict_single_image,
+                   detect_polygons, recognize_lines, _CPU_STATE)
 
 
 def _predict(image_path):
@@ -43,9 +50,12 @@ class NAFRec:
     NAFRec(detection_model_path=..., device="cpu", cpu_processes=4).
     `input_folder` is not needed. page_xml / alto_xml / xml_folder
     are carried into the returned xml_input.
+
+    cpu_pool=False starts only the model workers (no CPU pre/postprocessing pool), for callers
+    that bring their own CPU processes; see detect() / recognize().
     """
 
-    def __init__(self, **options):
+    def __init__(self, *, cpu_pool=True, **options):
         options.setdefault("input_folder", None)  # unused in library mode
         self.args = make_args(**options)
         validate_args(self.args)
@@ -58,6 +68,7 @@ class NAFRec:
             cpu_processes = max(1, physical // 2)
         else:
             cpu_processes = max(1, min(physical, 6 * len(self.devices)))
+        self.cpu_processes = cpu_processes  # also the sensible default size for a caller's own CPU pool
 
         ctx = get_context("spawn")  # required for CUDA
         self._manager = ctx.Manager()
@@ -74,8 +85,22 @@ class NAFRec:
             # init_cpu_worker will set the correct queues in _CPU_STATE
             initializer=init_cpu_worker,
             initargs=(self.args, self._queues, self._results, self._slots),
-        )
+        ) if cpu_pool else None
         self._closed = False
+        self._owner = True
+
+    def __getstate__(self):
+        # Pickles as a handle to the running model workers (queues, results, slots), e.g. to
+        # hand to the initializer of a caller's own pool. A handle can't submit() or close().
+        return {k: getattr(self, k) for k in (
+            "args", "devices", "cpu_processes", "_queues", "_results", "_slots")}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._manager = self._pool = None
+        self._workers = []
+        self._closed = False
+        self._owner = False
 
     def submit(self, image_path):
         """Queue an image; returns a multiprocessing AsyncResult whose value is
@@ -83,6 +108,9 @@ class NAFRec:
         Errors are raised on .get()."""
         if self._closed:
             raise RuntimeError("NAFRec is closed")
+        if self._pool is None:
+            raise RuntimeError(
+                "NAFRec has no CPU pool (cpu_pool=False, or a handle in another process)")
         return self._pool.apply_async(_predict, (str(image_path),))
 
     def _wait(self, future):
@@ -100,17 +128,44 @@ class NAFRec:
         """Process one image and block until done. Returns (preds, xml_input) or None."""
         return self._wait(self.submit(image_path))
 
+    def _run(self, fn, *fn_args):
+        """Run a CPU-side step in the CPU pool if there is one, else in the calling process
+        (the model workers do the model part either way)."""
+        if self._closed:
+            raise RuntimeError("NAFRec is closed")
+        if self._pool is not None:
+            return self._wait(self._pool.apply_async(fn, fn_args))
+        if not _CPU_STATE:
+            init_cpu_worker(self.args, self._queues, self._results, self._slots)
+        return fn(*fn_args)
+
+    def detect(self, image_path):
+        """Segment one image; blocks. Returns (line_polygons, line_confs, line_max_mins,
+        region_polygons, region_confs, region_max_mins, image_shape) after the usual
+        thresholding / merging / sliver filtering."""
+        return self._run(detect_polygons, str(image_path))
+
+    def recognize(self, image_path, ordered_lines):
+        """Classify (when both recognizers are configured) and recognize caller-supplied lines;
+        blocks. ordered_lines is a list of regions as made by nafrec.utils.order_regions_lines
+        (each with 'lines', 'line_confs' and 'img_shape'). Returns (preds, model_name), with preds
+        a list with one dict per region (its 'text_lines' holding polygon, text, text_conf, ...),
+        or None if there were no lines."""
+        preds, model_name = self._run(recognize_lines, str(image_path), ordered_lines)
+        return None if preds is None else (preds, model_name)
+
     def process_many(self, image_paths):
         """Process several images in parallel; returns results in input order (each (preds, xml_input) or None)."""
         futures = [self.submit(p) for p in image_paths]
         return [self._wait(f) for f in futures]
 
     def close(self):
-        if self._closed:
+        if self._closed or not self._owner:
             return
         self._closed = True
-        self._pool.close()
-        self._pool.join()
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.join()
         stop_inference_workers(self.args, self.devices,
                                self._workers, self._queues)
         self._manager.shutdown()
