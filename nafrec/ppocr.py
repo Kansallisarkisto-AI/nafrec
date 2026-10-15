@@ -9,10 +9,12 @@ import cv2
 import os
 
 
-GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT
+# Priority order: TensorRT (only if enabled) > CUDA on NVIDIA, ROCm > MIGraphX on AMD.
+GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enable_tensorrt)
                  "CUDAExecutionProvider",        # NVIDIA regular CUDA
                  "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
-                 "ROCMExecutionProvider")        # AMD, ORT <= 1.22 (legacy)
+                 "ROCMExecutionProvider",)        # AMD, ORT <= 1.22 (legacy)
+
 
 
 def _is_gpu_session(providers):
@@ -110,7 +112,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
     label: model name for log messages.
     """
     import onnxruntime as ort
-    ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
+    #ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
     device = str(device)
     # get available providers
@@ -142,33 +144,39 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
 
     device_id = int(device.split(":")[1]) if ":" in device else 0
 
+    providers = []
     for name in GPU_PROVIDERS:
-        if name in available:
-            if name == "TensorrtExecutionProvider":
-                if enable_tensorrt:
-                    print(f"[info] using TensorRT" +
-                          (f" for {label}" if label else ""))
-                    trt_ep_options = {
-                        "trt_fp16_enable": True if label == "ppocrv6" else False,
-                        "trt_engine_cache_enable": True,
-                        "trt_timing_cache_enable": True,
-                        "trt_dump_ep_context_model": True,
-                        "trt_force_timing_cache": True,
-                        # the timing cache is keyed by GPU/TensorRT version, not by model: shared on purpose
-                        "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
-                        "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
-                        "trt_ep_context_file_path": './',
-                        # level 2 and lower would replace measurements with heuristics
-                        "trt_builder_optimization_level": 5,
-                        "device_id": device_id
-                    }
-                    if trt_profile is not None:
-                        apply_trt_profile(trt_ep_options, *trt_profile)
+        if name not in available:
+            continue
+        if name == "TensorrtExecutionProvider":
+            if not enable_tensorrt:
+                continue
+            print(f"[info] using TensorRT" +
+                  (f" for {label}" if label else ""))
+            trt_ep_options = {
+                "trt_fp16_enable": label == "ppocrv6",
+                "trt_engine_cache_enable": True,
+                "trt_timing_cache_enable": True,
+                "trt_dump_ep_context_model": True,
+                "trt_force_timing_cache": True,
+                # the timing cache is keyed by GPU/TensorRT version, not by model: shared on purpose
+                "trt_timing_cache_path": _prepare_cache_dir("./trt_timingcache", None),
+                "trt_engine_cache_path": _prepare_cache_dir("./trt_enginecache", trt_cache_subdir),
+                "trt_ep_context_file_path": './',
+                # level 2 and lower would replace measurements with heuristics
+                "trt_builder_optimization_level": 5,
+                "device_id": device_id
+            }
+            if trt_profile is not None:
+                apply_trt_profile(trt_ep_options, *trt_profile)
+            providers.append((name, trt_ep_options))
+        else:
+            providers.append((name, {"device_id": device_id}))
 
-                    # when using TensorRT, we also have to return the CUDA fallback
-                    return [(name, trt_ep_options), ("CUDAExecutionProvider", {"device_id": device_id}), "CPUExecutionProvider"], option
-            else:
-                return [(name, {"device_id": device_id}), "CPUExecutionProvider"], option
+    if providers:
+        print("[info] GPU providers: " + ", ".join(p[0] for p in providers))
+        # all available GPU providers in priority order, generic CPU as last fallback
+        return providers + ["CPUExecutionProvider"], option
 
     print("[warn] no GPU execution provider found in onnxruntime "
           f"(available: {available}) -- PP-OCR will run on CPU")
