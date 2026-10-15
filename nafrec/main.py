@@ -56,7 +56,8 @@ class OCRInput(BaseModel):
     batch_size: int
 
 
-def build_parser():
+def build_parser(library=False):
+    """library=True: for hosts (e.g. SfRD) that parse nafrec options from their own command line; no input folder needed."""
     parser = argparse.ArgumentParser(
         description="Load and run inference model")
     parser.add_argument(
@@ -104,7 +105,7 @@ def build_parser():
     parser.add_argument(
         "--input_folder",
         type=str,
-        required=True,
+        required=not library,
         help="Image input folder"
     )
     parser.add_argument(
@@ -370,9 +371,9 @@ def build_parser():
     parser.add_argument(
         "--detector",
         type=str,
-        choices=["rfdetr", "paddle"],
+        choices=["rfdetr", "paddle", "none"],
         default="rfdetr",
-        help="Segmentation backend: 'rfdetr' (--detection_model_path) or 'paddle' (ONNX DB text detection model for lines, plus an optional PP-DocLayout layout model for regions)"
+        help="Segmentation backend: 'rfdetr' (--detection_model_path) or 'paddle' (ONNX DB text detection model for lines, plus an optional PP-DocLayout layout model for regions). 'none' loads no detection model (library use with caller-supplied lines only, e.g. SfRD)"
     )
     parser.add_argument("--paddle_layout_model_path", type=str, default=None,
                         help="Optional Paddle layout model (ONNX, e.g. PP-DocLayout) giving the text regions. Without it each page is one full-page region.")
@@ -410,8 +411,8 @@ def build_parser():
     return parser
 
 
-def parse_args(argv=None):
-    return build_parser().parse_args(argv)
+def parse_args(argv=None, library=False):
+    return build_parser(library).parse_args(argv)
 
 
 def make_args(**overrides):
@@ -734,6 +735,8 @@ def segmentation_max_size(args):
 
 def load_detection_model(args, device):
     """Load the configured segmentation backend onto `device`."""
+    if args.detector == "none":
+        return None
     if args.detector == "paddle":
         return load_paddle_layout_model(
             args.paddle_layout_model_path,
@@ -774,6 +777,8 @@ def run_detection(detection_model, image_path, args):
     paddle: returns the raw line / region polygons (see PaddleLayoutDetector.predict_raw).
     In both cases the polygon post-processing happens in the CPU worker (see postprocess_detection).
     """
+    if detection_model is None:
+        raise ValueError("detector='none': no detection model is loaded")
     if args.detector == "paddle":
         return detection_model.predict_raw(image_path)
     return predict_masks(
@@ -970,13 +975,11 @@ def init_cpu_worker(args, queues, inference_results, device_slots):
                       results=inference_results, slots=device_slots)
 
 
-def predict_single_image(image_path):
+def detect_polygons(image_path):
     """
-    CPU worker: segmentation request -> polygon post-processing -> ordering ->
-    cropping -> recognition request -> page stats.
-    Returns (preds, xml_input, msg). preds/xml_input are exactly what get_xml(preds, xml_input)
-    (and save_json_output(preds, ...)) take; both are None, with an explanation in msg,
-    when there was nothing to output.
+    CPU worker: segmentation request -> polygon post-processing.
+    Returns (line_polygons, line_confs, line_max_mins, region_polygons, region_confs,
+    region_max_mins, image_shape).
     """
     args = _CPU_STATE["args"]
     q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
@@ -984,8 +987,52 @@ def predict_single_image(image_path):
     detection_result = run_inference_task(
         q, res, slots, "predict_polygons", {"image_path": image_path})
     # Mask -> polygon post-processing runs here in the CPU worker, not in the model worker
+    return postprocess_detection(detection_result, args)
+
+
+def recognize_lines(image_path, ordered_lines):
+    """
+    CPU worker: cropping -> classification + recognition request -> page stats.
+    ordered_lines: regions as returned by order_regions_lines (each with 'lines',
+    'line_confs', 'img_shape', ...); any caller-supplied line polygons work.
+    Returns (preds, htr_model_name), or (None, None) when there was nothing to transcribe.
+    """
+    q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
+
+    flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
+    if not flat_polygons:
+        return None, None
+
+    image = load_with_torchvision(image_path)
+    cropped_lines = crop_lines(flat_polygons, image)
+    del image
+
+    text_predictions, htr_model_name = run_inference_task(
+        q, res, slots, "classify_and_recognize",
+        {"cropped_lines": cropped_lines,
+         "line_polygons": flat_polygons,
+         "line_confs": flat_confs})
+
+    if not text_predictions:
+        return None, None
+
+    height, width = ordered_lines[0]['img_shape']
+    lines_dict = get_page_stats(
+        text_predictions, Path(image_path).name, height, width)
+    return process_text_predictions(lines_dict, ordered_lines, n_lines), htr_model_name
+
+
+def predict_single_image(image_path):
+    """
+    CPU worker: detect_polygons -> ordering -> recognize_lines.
+    Returns (preds, xml_input, msg). preds/xml_input are exactly what get_xml(preds, xml_input)
+    (and save_json_output(preds, ...)) take; both are None, with an explanation in msg,
+    when there was nothing to output.
+    """
+    args = _CPU_STATE["args"]
+
     (line_polygons, line_confs, line_max_mins, region_polygons,
-     region_confs, region_max_mins, image_shape) = postprocess_detection(detection_result, args)
+     region_confs, region_max_mins, image_shape) = detect_polygons(image_path)
 
     line_preds = {'coords': line_polygons,
                   'max_min': line_max_mins, 'confs': line_confs}
@@ -1007,27 +1054,9 @@ def predict_single_image(image_path):
     if not ordered_lines:
         return None, None, "no lines/regions detected, skipping output"
 
-    flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
-    if not flat_polygons:
+    preds, htr_model_name = recognize_lines(image_path, ordered_lines)
+    if preds is None:
         return None, None, "no transcribable lines found, skipping output"
-
-    image = load_with_torchvision(image_path)
-    cropped_lines = crop_lines(flat_polygons, image)
-    del image
-
-    text_predictions, htr_model_name = run_inference_task(
-        q, res, slots, "classify_and_recognize",
-        {"cropped_lines": cropped_lines,
-         "line_polygons": flat_polygons,
-         "line_confs": flat_confs})
-
-    if not text_predictions:
-        return None, None, "no transcribable lines found, skipping output"
-
-    height, width = ordered_lines[0]['img_shape']
-    lines_dict = get_page_stats(
-        text_predictions, Path(image_path).name, height, width)
-    preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
 
     xml_input = XmlInput(
         image_path=image_path,
