@@ -8,6 +8,8 @@ import numpy as np
 import cv2
 import os
 
+# For AMD
+import ctypes, glob, site
 
 # Priority order: TensorRT (only if enabled) > CUDA on NVIDIA, ROCm > MIGraphX on AMD.
 GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enable_tensorrt)
@@ -15,6 +17,11 @@ GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enab
                  "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
                  "ROCMExecutionProvider",)        # AMD, ORT <= 1.22 (legacy)
 
+# Try to load migraphx libraries that were installed in a side directory by "migraphx" and "migraphx-libs" wheels.
+d = os.path.join(site.getsitepackages()[0], "migraphx_libs")
+for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
+    try: ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+    except OSError: pass
 
 
 def _is_gpu_session(providers):
