@@ -19,7 +19,7 @@ GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enab
                  "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
                  "ROCMExecutionProvider",)        # AMD, ORT <= 1.22 (legacy)
 
-# Try to load migraphx libraries that were installed in a side directory by "migraphx" and "migraphx-libs" wheels.
+# Try to load migraphx libraries if they were installed in a side directory by "migraphx" and "migraphx-libs" wheels.
 d = os.path.join(site.getsitepackages()[0], "migraphx_libs")
 for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
     try:
@@ -138,7 +138,8 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
         # Special settings for CPU providers
         option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-        option.intra_op_num_threads = max(1, os.cpu_count())
+        # respect Slurm affinities
+        option.intra_op_num_threads = max(1, min(len(os.sched_getaffinity(0)), os.cpu_count()))
         option.inter_op_num_threads = 1
 
         option.enable_cpu_mem_arena = True
@@ -201,6 +202,12 @@ def _create_session(model_path, providers, options=None, fp16=False):
     model is converted to fp16 in memory (the .onnx file is untouched). Inputs and
     outputs stay fp32, so callers don't change. On CPU, fp16 is ignored."""
     import onnxruntime as ort
+
+    if options.intra_op_num_threads == 0:
+        # Respect the Slurm/cgroup allocation, not the host's core count,
+        # and set it explicitly so ORT doesn't try to pin threads to cores that are disallowed.
+        options.intra_op_num_threads = max(1, min(len(os.sched_getaffinity(0)), 8))
+        options.inter_op_num_threads = 1
 
     if fp16 and _is_gpu_session(providers):
         import onnx
