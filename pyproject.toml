@@ -58,6 +58,8 @@ gpu-amd = [
   "onnxruntime-migraphx",
   "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@xadupre/transformers5",
   "optimum",
+  "migraphx",
+  "migraphx-libs"
 ]
 
 [project.urls]
@@ -71,14 +73,22 @@ nafrec = "nafrec:main.entrypoint"
 
 # Don't try to satisfy both extras at once (they provide the same module).
 [tool.uv]
-conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }]]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }, { extra = "gpu-amd" }]]
 
 [tool.uv.sources]
 onnxruntime-migraphx = { index = "amd" }
+migraphx = { index = "migraphx" }
+migraphx-libs = { index = "migraphx" }
 
 [[tool.uv.index]]
 name = "amd"
 url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/"
+format = "flat"
+explicit = true
+
+[[tool.uv.index]]
+name = "migraphx"
+url = "https://rocm.frameworks.amd.com/whl-multi-arch/migraphx/"
 format = "flat"
 explicit = true
 
