@@ -54,6 +54,11 @@ gpu-optimum = [
   "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@xadupre/transformers5",
   "optimum",
 ]
+gpu-amd = [
+  "onnxruntime-migraphx",
+  "optimum-onnx@git+https://github.com/huggingface/optimum-onnx.git@xadupre/transformers5",
+  "optimum",
+]
 
 [project.urls]
 Homepage = "https://github.com/Kansallisarkisto-AI/nafrec"
@@ -66,7 +71,14 @@ nafrec = "nafrec:main.entrypoint"
 
 # Don't try to satisfy both extras at once (they provide the same module).
 [tool.uv]
-conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }]]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }]]
+
+[tool.uv.sources]
+onnxruntime-migraphx = { index = "amd" }
+
+[[tool.uv.index]]
+name = "amd"
+url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/"
 
 [tool.hatch.metadata]
 allow-direct-references = true
