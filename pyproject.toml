@@ -79,6 +79,8 @@ onnxruntime-migraphx = { index = "amd" }
 [[tool.uv.index]]
 name = "amd"
 url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/"
+format = "flat"
+explicit = true
 
 [tool.hatch.metadata]
 allow-direct-references = true
