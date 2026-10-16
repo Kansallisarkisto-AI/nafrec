@@ -1,6 +1,8 @@
 # nafrec
 An HTR and OCR pipeline for historical text recognition, which classifies text lines into cyrillic or latin based on their script types and then passes them to a proper (TrOCR or PP-OCRv6) text recognition model.
 
+[![ArchXAI project logo](https://centralbaltic.eu/wp-content/uploads/2025/07/ArchXAI_RGB_JPG-335x170.jpg)](https://centralbaltic.eu/project/archxai/)
+
 ## Installation
 
 This project uses `pyproject.toml` for dependency management. You can install the required packages using one of the following methods:
