@@ -366,6 +366,13 @@ def build_parser(library=False):
         default=32,
         help="Batch size for PP-OCR text recognition"
     )
+    parser.add_argument(
+        "--ppocr_pad_batch",
+        type=str,
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Pad every PP-OCR batch (incl. the last partial one and single-line retries) to --ppocr_batch_size so the model always sees the same batch shape. MIGraphX compiles for one fixed shape and fails on others. auto: on only when MIGraphX is the active provider."
+    )
 
     # Detector selection / Paddle layout + text detection args
     parser.add_argument(
@@ -699,6 +706,8 @@ def load_latin_recognizer(args, device):
             trt_dynamic_shapes=not args.no_trt_dynamic_shapes,
             trt_opt_width=args.ppocr_trt_opt_width,
             enable_tensorrt=args.enable_tensorrt,
+            pad_batch={"auto": None, "on": True,
+                       "off": False}[args.ppocr_pad_batch],
         )
         return model, None
     return load_trocr_model(args.recognition_model_path, args.processor_path, device, fp16=args.fp16_rec)

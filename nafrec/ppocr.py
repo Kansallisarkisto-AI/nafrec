@@ -9,7 +9,9 @@ import cv2
 import os
 
 # For AMD
-import ctypes, glob, site
+import ctypes
+import glob
+import site
 
 # Priority order: TensorRT (only if enabled) > CUDA on NVIDIA, ROCm > MIGraphX on AMD.
 GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enable_tensorrt)
@@ -20,8 +22,10 @@ GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enab
 # Try to load migraphx libraries that were installed in a side directory by "migraphx" and "migraphx-libs" wheels.
 d = os.path.join(site.getsitepackages()[0], "migraphx_libs")
 for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
-    try: ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-    except OSError: pass
+    try:
+        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass
 
 
 def _is_gpu_session(providers):
@@ -119,7 +123,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
     label: model name for log messages.
     """
     import onnxruntime as ort
-    #ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
+    # ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
     device = str(device)
     # get available providers
@@ -221,7 +225,8 @@ class PPOCRRecognizer:
     """Wraps an ONNX PP-OCRv6 recognition model + preprocessing + CTC decoding."""
 
     def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                 width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False):
+                 width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False,
+                 pad_batch=None):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
@@ -236,6 +241,19 @@ class PPOCRRecognizer:
             device, trt_profile, enable_tensorrt, label="ppocrv6")
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
+
+        # MIGraphX compiles a static-shape program for the first input shape it sees, so a
+        # different batch size later fails ("Incorrect shape ... for parameter"). Pad every
+        # batch up to a fixed size and drop the extra outputs. pad_batch=None -> auto: on only
+        # when MIGraphX is the provider actually in use (get_providers() omits failed ones).
+        if pad_batch is None:
+            pad_batch = self.session.get_providers(
+            )[0] == "MIGraphXExecutionProvider"
+        self.pad_batch = bool(pad_batch)
+        self._pad_to = batch_size
+        if self.pad_batch:
+            print(
+                f"[info] PP-OCR: padding batches to {batch_size} lines (fixed batch shape)")
 
         self.pre = RecPreProcess(rec_image_shape=(
             3, img_height, img_width_min), width_buckets=width_buckets)
@@ -260,7 +278,13 @@ class PPOCRRecognizer:
 
     def _recognize_batch(self, imgs_bgr):
         x = self.pre(imgs_bgr)
+        n = x.shape[0]
+        if self.pad_batch and n < self._pad_to:
+            # repeat the last sample (rows are independent at inference); outputs are sliced off below
+            x = np.concatenate(
+                [x, np.repeat(x[-1:], self._pad_to - n, axis=0)], axis=0)
         out = self.session.run(None, {self.input_name: x})[0]
+        out = out[:n]
         texts, scores = self.post(out)
         return texts, scores
 
@@ -268,6 +292,9 @@ class PPOCRRecognizer:
         """line_images_rgb: list of RGB uint8 arrays (H, W, 3).
         Returns (scores, texts) in the input order."""
         n = len(line_images_rgb)
+        if self.pad_batch:
+            # keep the fixed batch shape equal to the chunk size used below
+            self._pad_to = batch_size
         texts, scores = [""] * n, [0.0] * n
 
         valid = []  # (original index, BGR image)
@@ -306,9 +333,10 @@ class PPOCRRecognizer:
 
 
 def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
-                     width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False):
+                     width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False,
+                     pad_batch=None):
     return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets,
-                           batch_size, trt_dynamic_shapes, trt_opt_width, enable_tensorrt)
+                           batch_size, trt_dynamic_shapes, trt_opt_width, enable_tensorrt, pad_batch)
 
 
 def get_ppocr_preds(data, recognizer):
