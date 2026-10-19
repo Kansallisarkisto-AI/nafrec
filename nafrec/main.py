@@ -114,32 +114,32 @@ def build_parser(library=False):
     parser.add_argument(
         "--region_model_name",
         type=str,
-        default='rfdetr_text_seg_model_202510',
-        help="region model name"
+        default='Default',
+        help="Region detection model name"
     )
     parser.add_argument(
         "--line_model_name",
         type=str,
-        default='rfdetr_text_seg_model_202510',
-        help="line  model name"
+        default='Default',
+        help="Line detection model name"
     )
     parser.add_argument(
         "--text_rec_model_name",
         type=str,
-        default='202509_tf32',
-        help="Text rec model name"
+        default='Default',
+        help="Latin text recognition model name"
     )
     parser.add_argument(
         "--cyrillic_text_rec_model_name",
         type=str,
-        default='cyrillic_large_202603',
-        help="Text rec model name"
+        default='Default',
+        help="Cyrillic text recognition model name"
     )
     parser.add_argument(
         "--script_classification_model_name",
         type=str,
-        default='script_classifier_202610',
-        help="Text rec model name"
+        default='naf_script_classifier_202610',
+        help="Script classification model name "
     )
     parser.add_argument(
         "--trocr_batch_size",
