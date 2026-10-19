@@ -16,16 +16,9 @@ import site
 # Priority order: TensorRT (only if enabled) > CUDA on NVIDIA, ROCm > MIGraphX on AMD.
 GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enable_tensorrt)
                  "CUDAExecutionProvider",        # NVIDIA regular CUDA
-                 "MIGraphXExecutionProvider",    # AMD, ORT >= 1.23
-                 "ROCMExecutionProvider",)        # AMD, ORT <= 1.22 (legacy)
+                 "ROCMExecutionProvider",)        # AMD, ORT <= 1.22.1 (legacy)
 
-# Try to load migraphx libraries if they were installed in a side directory by "migraphx" and "migraphx-libs" wheels.
-d = os.path.join(site.getsitepackages()[0], "migraphx_libs")
-for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
-    try:
-        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-    except OSError:
-        pass
+# TODO: MIGraphX on AMD and ORT >= 1.23, unfortunately PP-OCRv6+MIGraphX is currently broken for unknown reasons on MI250X!
 
 
 def _is_gpu_session(providers):
