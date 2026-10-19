@@ -254,7 +254,7 @@ class PPOCRRecognizer:
         # when MIGraphX is the provider actually in use (get_providers() omits failed ones).
         if pad_batch is None:
             pad_batch = self.session.get_providers(
-            )[0] == "MIGraphXExecutionProvider"
+            )[0] == "ROCMExecutionProvider"
         self.pad_batch = bool(pad_batch)
         self._pad_to = batch_size
         if self.pad_batch:
