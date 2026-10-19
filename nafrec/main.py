@@ -6,6 +6,7 @@ from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons, 
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .trocr import get_text_preds, load_trocr_model
 from .xml_output import save_xml
+from .model_types import ModelType, combine_recognition_types
 import torch
 import os
 import time
@@ -31,16 +32,18 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
-
 class XmlInput(BaseModel):
     image_path: str
     page_xml: int
     alto_xml: int
     xml_path: str
     region_segment_model_name: str
+    region_segment_model_type: ModelType
     line_segment_model_name: str
+    line_segment_model_type: ModelType
     classification_model_name: Optional[str] = None
     text_recognition_model_name: str
+    text_recognition_model_type: ModelType
 
 
 class ClassifierInput(BaseModel):
@@ -468,7 +471,8 @@ def get_text_predictions(
     line_polygons,
     img_line_confs,
     model_config,
-    args
+    args,
+    return_model_type=False
 ):
     """
     Routes each classified line to its matching HTR model and returns
@@ -476,13 +480,18 @@ def get_text_predictions(
 
     model_config: {predicted_label: (recognition_model, processor)}
 
-    Returns (all_text_predictions, model_name):
+    Returns (all_text_predictions, model_name), or with return_model_type=True
+    (all_text_predictions, model_name, model_type):
       all_text_predictions -- list in the same order as cropped_lines,
         one entry per input line, always (see the missing-results check
         below).
       model_name -- the HTR model name(s) actually used on this page,
         for recording in the output XML/json (e.g. both names joined if
         a page mixed scripts).
+      model_type -- ModelType of the recognizer(s) actually used on this page:
+        TROCR / PPOCRV6_MEDIUM_REC when one recognizer transcribed every line,
+        LATIN_TROCR_AND_CYRILLIC_TROCR / LATIN_PPOCRV6_AND_CYRILLIC_TROCR when
+        both latin and cyrillic lines were transcribed.
 
     """
     n_lines = len(classification_results)
@@ -494,6 +503,7 @@ def get_text_predictions(
         "latin": args.text_rec_model_name
     }
     used_models = []
+    used_types = {}  # label -> ModelType of the recognizer that handled it
 
     for label, indices in indices_by_label.items():
         if not indices:
@@ -526,6 +536,8 @@ def get_text_predictions(
             subset_predictions = get_text_preds(payload, model, processor)
 
         used_models.append(model_names[label])
+        used_types[label] = (ModelType.PPOCRV6_MEDIUM_REC if use_ppocr
+                             else ModelType.TROCR)
 
         if len(subset_predictions) != len(indices):
             raise ValueError(
@@ -554,6 +566,11 @@ def get_text_predictions(
     # In case two models were used for text recognition, both names are combined
     model_name = " and ".join(used_models)
 
+    if return_model_type:
+        model_type = combine_recognition_types(
+            latin_type=used_types.get("latin"),
+            cyrillic_type=used_types.get("cyrillic"))
+        return all_text_predictions, model_name, model_type
     return all_text_predictions, model_name
 
 
@@ -830,7 +847,7 @@ def run_classify_and_recognize(cropped_lines, line_polygons, line_confs,
 
     return get_text_predictions(
         classification_results, cropped_lines, line_polygons, line_confs,
-        model_config, args,
+        model_config, args, return_model_type=True,
     )
 
 
@@ -999,36 +1016,42 @@ def detect_polygons(image_path):
     return postprocess_detection(detection_result, args)
 
 
-def recognize_lines(image_path, ordered_lines):
+def recognize_lines(image_path, ordered_lines, return_model_type=False):
     """
     CPU worker: cropping -> classification + recognition request -> page stats.
     ordered_lines: regions as returned by order_regions_lines (each with 'lines',
     'line_confs', 'img_shape', ...); any caller-supplied line polygons work.
     Returns (preds, htr_model_name), or (None, None) when there was nothing to transcribe.
+    With return_model_type=True returns (preds, htr_model_name, htr_model_type), or
+    (None, None, None).
     """
+    nothing = (None, None, None) if return_model_type else (None, None)
     q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
 
     flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
     if not flat_polygons:
-        return None, None
+        return nothing
 
     image = load_with_torchvision(image_path)
     cropped_lines = crop_lines(flat_polygons, image)
     del image
 
-    text_predictions, htr_model_name = run_inference_task(
+    text_predictions, htr_model_name, htr_model_type = run_inference_task(
         q, res, slots, "classify_and_recognize",
         {"cropped_lines": cropped_lines,
          "line_polygons": flat_polygons,
          "line_confs": flat_confs})
 
     if not text_predictions:
-        return None, None
+        return nothing
 
     height, width = ordered_lines[0]['img_shape']
     lines_dict = get_page_stats(
         text_predictions, Path(image_path).name, height, width)
-    return process_text_predictions(lines_dict, ordered_lines, n_lines), htr_model_name
+    preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
+    if return_model_type:
+        return preds, htr_model_name, htr_model_type
+    return preds, htr_model_name
 
 
 def predict_single_image(image_path):
@@ -1063,9 +1086,28 @@ def predict_single_image(image_path):
     if not ordered_lines:
         return None, None, "no lines/regions detected, skipping output"
 
-    preds, htr_model_name = recognize_lines(image_path, ordered_lines)
+    preds, htr_model_name, text_recognition_model_type = recognize_lines(
+        image_path, ordered_lines, return_model_type=True)
     if preds is None:
         return None, None, "no transcribable lines found, skipping output"
+
+    # Infer used model types and provide to XML input
+    if args.detector == "paddle":
+        if args.paddle_layout_model_path:
+            region_segment_model_type = ModelType.PPLAYOUT_L_V1
+        else:
+            region_segment_model_type = ModelType.NONE
+
+        if args.paddle_det_model_path:
+            line_segment_model_type = ModelType.PPOCRV6_MEDIUM_DET
+        else:
+            line_segment_model_type = ModelType.NONE
+    elif args.detector == "rfdetr":
+        region_segment_model_type = ModelType.RFDETR
+        line_segment_model_type = ModelType.RFDETR
+    else:
+        region_segment_model_type = ModelType.CALLER_SUPPLIED_LINES
+        line_segment_model_type = ModelType.CALLER_SUPPLIED_LINES
 
     xml_input = XmlInput(
         image_path=image_path,
@@ -1074,10 +1116,13 @@ def predict_single_image(image_path):
         xml_path=os.path.dirname(
             image_path) if not args.xml_folder else args.xml_folder,
         region_segment_model_name=args.region_model_name,
+        region_segment_model_type=region_segment_model_type,
         line_segment_model_name=args.line_model_name,
+        line_segment_model_type=line_segment_model_type,
         classification_model_name=args.script_classification_model_name if classification_enabled(
             args) else None,
         text_recognition_model_name=htr_model_name,
+        text_recognition_model_type=text_recognition_model_type,
     )
     return preds, xml_input, ""
 

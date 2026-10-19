@@ -27,6 +27,7 @@ model workers. Pass the NAFRec object itself to those processes (it pickles as a
 to the model workers) and call the building blocks of process() there:
     lines = handle.detect("page.jpg")                  # 7-tuple of raw line / region polygons
     preds, model_name = handle.recognize("page.jpg", ordered_lines)   # or None
+    # handle.recognize(..., with_model_type=True) also returns the nafrec.model_types.ModelType
 """
 import os
 from multiprocessing import get_context
@@ -145,14 +146,20 @@ class NAFRec:
         thresholding / merging / sliver filtering."""
         return self._run(detect_polygons, str(image_path))
 
-    def recognize(self, image_path, ordered_lines):
+    def recognize(self, image_path, ordered_lines, with_model_type=False):
         """Classify (when both recognizers are configured) and recognize caller-supplied lines;
         blocks. ordered_lines is a list of regions as made by nafrec.utils.order_regions_lines
         (each with 'lines', 'line_confs' and 'img_shape'). Returns (preds, model_name), with preds
         a list with one dict per region (its 'text_lines' holding polygon, text, text_conf, ...),
-        or None if there were no lines."""
-        preds, model_name = self._run(recognize_lines, str(image_path), ordered_lines)
-        return None if preds is None else (preds, model_name)
+        or None if there were no lines. With with_model_type=True returns
+        (preds, model_name, model_type) instead, model_type being the nafrec.model_types.ModelType
+        of the recognizer(s) used (e.g. LATIN_PPOCRV6_AND_CYRILLIC_TROCR), for building an
+        XmlInput / the XML outputs."""
+        preds, model_name, model_type = self._run(
+            recognize_lines, str(image_path), ordered_lines, True)
+        if preds is None:
+            return None
+        return (preds, model_name, model_type) if with_model_type else (preds, model_name)
 
     def process_many(self, image_paths):
         """Process several images in parallel; returns results in input order (each (preds, xml_input) or None)."""

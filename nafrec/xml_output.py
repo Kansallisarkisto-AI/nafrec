@@ -4,9 +4,25 @@ from pathlib import Path
 import os
 from lxml import etree
 import datetime
+from html import escape
+
+from .model_types import (ModelType, REGION_STEPS, LINE_STEPS, RECOGNITION_STEPS,
+                          describe_step)
+
+
+def _step_text(step, model_name):
+    """Natural-language one-liner for a processing step, e.g. for PAGE XML <Comments>."""
+    text = step.description
+    if step.software and model_name:
+        text += f" ({model_name})"
+    return text
 
 
 class PageXML:
+
+    def __init__(self, processing_comment=None):
+        # Natural-language description of the models used, written to Metadata/Comments
+        self.processing_comment = processing_comment
 
     def write_page(self, xml_file, path):
         """Saves Page xml file."""
@@ -37,6 +53,10 @@ class PageXML:
         cd.text = now
         lc = etree.SubElement(m, "LastChange")
         lc.text = now
+        if self.processing_comment:
+            # PAGE schema order in Metadata: Creator, Created, LastChange, Comments
+            cm = etree.SubElement(m, "Comments")
+            cm.text = self.processing_comment
 
         # Root -> Page
         p = etree.SubElement(root, "Page")
@@ -100,11 +120,36 @@ class PageXML:
 
 
 class AltoXML:
-    def __init__(self, seg_model, line_model, classification_model, htr_model):
+    def __init__(self, seg_model, line_model, classification_model, htr_model,
+                 region_type=ModelType.RFDETR, line_type=ModelType.RFDETR,
+                 recognition_type=ModelType.TROCR):
+        """*_model are model names (recorded as software versions), *_type the ModelType
+        of each step; the type decides the natural-language description and software
+        credited in the Processing elements."""
         self.seg_model = seg_model
         self.line_model = line_model
         self.classification_model = classification_model
         self.htr_model = htr_model
+        self.region_step = describe_step(REGION_STEPS, region_type, "region detection")
+        self.line_step = describe_step(LINE_STEPS, line_type, "line detection")
+        self.recognition_step = describe_step(
+            RECOGNITION_STEPS, recognition_type, "text recognition")
+
+    @staticmethod
+    def processing_block(step_id, step, model_name):
+        """ALTO <Processing> element text. Software is only credited when a model was used."""
+        software = ""
+        if step.software:
+            version = f"\n                    <softwareVersion>{escape(str(model_name))}</softwareVersion>" if model_name else ""
+            software = f"""
+                <processingSoftware>
+                    <softwareCreator>{escape(step.creator)}</softwareCreator>
+                    <softwareName>{escape(step.software)}</softwareName>{version}
+                </processingSoftware>"""
+        return f"""<Processing ID="{step_id}">
+                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
+                <processingStepDescription>{escape(step.description)}</processingStepDescription>{software}
+            </Processing>"""
 
     def write_alto(self, newsoup, path):
         """Saves Alto xml file."""
@@ -224,34 +269,10 @@ class AltoXML:
             <sourceImageInformation>
                 <fileName>{image_path}</fileName>
             </sourceImageInformation>
-            <Processing ID="TEXT_REGION_SEGMENTATION">
-                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
-                <processingStepDescription>Text region detection</processingStepDescription>
-                <processingSoftware>
-                    <softwareCreator>Roboflow</softwareCreator>
-                    <softwareName>RFDETRSegPreview</softwareName>
-                    <softwareVersion>{self.seg_model}</softwareVersion>
-                </processingSoftware>
-            </Processing>
-            <Processing ID="TEXT_LINE_SEGMENTATION">
-                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
-                <processingStepDescription>Text line detection</processingStepDescription>
-                <processingSoftware>
-                    <softwareCreator>Roboflow</softwareCreator>
-                    <softwareName>RFDETRSegPreview</softwareName>
-                    <softwareVersion>{self.line_model}</softwareVersion>
-                </processingSoftware>
-            </Processing>
+            {self.processing_block("TEXT_REGION_SEGMENTATION", self.region_step, self.seg_model)}
+            {self.processing_block("TEXT_LINE_SEGMENTATION", self.line_step, self.line_model)}
             {script_step}
-            <Processing ID="TEXT_RECOGNITION">
-                <processingAgency>Kansallisarkisto - National Archives of Finland</processingAgency>
-                <processingStepDescription>Handwritten text recognition</processingStepDescription>
-                <processingSoftware>
-                    <softwareCreator>Microsoft</softwareCreator>
-                    <softwareName>TrOCR</softwareName>
-                    <softwareVersion>{self.htr_model}</softwareVersion>
-                </processingSoftware>
-            </Processing>
+            {self.processing_block("TEXT_RECOGNITION", self.recognition_step, self.htr_model)}
         </Description>
         <Styles></Styles>
         <Layout>        
@@ -407,6 +428,23 @@ class AltoXML:
         self.write_alto(alto, save_path)
 
 
+def describe_processing(input_data):
+    """Natural-language summary of the models used, for the PAGE XML Metadata/Comments."""
+    parts = [
+        _step_text(describe_step(REGION_STEPS, input_data.region_segment_model_type,
+                                 "region detection"), input_data.region_segment_model_name),
+        _step_text(describe_step(LINE_STEPS, input_data.line_segment_model_type,
+                                 "line detection"), input_data.line_segment_model_name),
+    ]
+    if input_data.classification_model_name:
+        parts.append("Text line script classification (latin or cyrillic) "
+                     f"({input_data.classification_model_name})")
+    parts.append(_step_text(describe_step(
+        RECOGNITION_STEPS, input_data.text_recognition_model_type, "text recognition"),
+        input_data.text_recognition_model_name))
+    return "; ".join(parts)
+
+
 def save_xml(text_predictions, input_data):
     """Function for saving the results in xml file.
 
@@ -430,7 +468,7 @@ def save_xml(text_predictions, input_data):
     xml_name = Path(input_data.image_path).stem + '.xml'
     # PAGE XML option
     if input_data.page_xml and input_data.xml_path:
-        page_maker = PageXML()
+        page_maker = PageXML(describe_processing(input_data))
         save_folder = Path(input_data.xml_path, 'page')
         os.makedirs(save_folder, exist_ok=True)
         save_path = str(Path(save_folder, xml_name))
@@ -442,6 +480,8 @@ def save_xml(text_predictions, input_data):
         os.makedirs(save_folder, exist_ok=True)
         save_path = str(Path(save_folder, xml_name))
         alto_maker = AltoXML(input_data.region_segment_model_name, input_data.line_segment_model_name,
-                             input_data.classification_model_name, input_data.text_recognition_model_name)
+                             input_data.classification_model_name, input_data.text_recognition_model_name,
+                             input_data.region_segment_model_type, input_data.line_segment_model_type,
+                             input_data.text_recognition_model_type)
         alto_maker.save_alto(
             text_predictions, input_data.image_path, save_path)
