@@ -78,7 +78,7 @@ nafrec = "nafrec:main.entrypoint"
 
 # Don't try to satisfy both extras at once (they provide the same module).
 [tool.uv]
-conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }, { extra = "gpu-amd" }]]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }, { extra = "gpu-amd-migraphx" }, { extra = "gpu-amd-rocm" }]]
 
 [tool.uv.sources]
 onnxruntime-rocm = { index = "amd" }
