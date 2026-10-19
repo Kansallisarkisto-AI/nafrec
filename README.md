@@ -79,6 +79,14 @@ nafrec \
     --input_folder /path/to/images/
 ```
 
+### Notes
+
+The AMD GPU execution providers for onnxruntime (ROCm and MIGraphX) are quite unstable. The ROCm provider seems to work on MI250X (only the first call fails, works after retrying), but only with completely static shapes i.e. padding batch size to be static and using the same minimum and maximum width. The MIGraphX provider runs on MI250X but gives incorrect results. MI300+ series and consumer AMD GPUs are untested. Paddle detection and layout models are currently untested on AMD GPUs.
+
+CPU backends ("cpu" and "cpu-openvino") seem relatively stable.
+
+Nvidia backends ("gpu" and "gpu-optimum") seem relatively stable, but expect differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (TODO: make this configurable).
+
 ### Arguments
 
 | Argument | Type | Default | Description |
