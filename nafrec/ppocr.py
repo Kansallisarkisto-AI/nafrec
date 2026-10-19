@@ -325,7 +325,7 @@ class PPOCRRecognizer:
             imgs = [im for _, im in chunk]
             success = False
             tries = 0
-            
+
             while not success and tries < 10:
                 try:
                     t, s = self._recognize_batch(imgs)
@@ -337,7 +337,7 @@ class PPOCRRecognizer:
 
             if not success:
                 print(
-                    f"[warn] PP-OCR batch failed ({e}) -- retrying its lines individually")
+                    f"[warn] PP-OCR batch failed, retrying its lines individually")
                 t, s = [], []
                 for im in imgs:
                     try:
