@@ -237,10 +237,10 @@ class PaddleLayoutDetector:
         if use_trt_profiles:
             det_profile = self._det_trt_profile(det_model_path, det_limit_side_len, det_limit_type,
                                                 det_max_side_limit, det_trt_opt_shape)
-        det_providers, _ = _get_providers_and_options(
+        det_providers, det_options = _get_providers_and_options(
             device, det_profile, enable_tensorrt, trt_cache_subdir="det", label="text detection model")
         # ignore fp16 here due to incompatibility
-        self.det = _create_session(det_model_path, det_providers)
+        self.det = _create_session(det_model_path, det_providers, options=det_options)
         self._det_input = self.det.get_inputs()[0].name
         self._det_pre = DetPreProcess(
             limit_side_len=det_limit_side_len,

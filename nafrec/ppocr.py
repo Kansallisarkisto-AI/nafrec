@@ -203,7 +203,7 @@ def _create_session(model_path, providers, options=None, fp16=False):
     outputs stay fp32, so callers don't change. On CPU, fp16 is ignored."""
     import onnxruntime as ort
 
-    if options.intra_op_num_threads == 0:
+    if options and options.intra_op_num_threads == 0:
         # Respect the Slurm/cgroup allocation, not the host's core count,
         # and set it explicitly so ORT doesn't try to pin threads to cores that are disallowed.
         options.intra_op_num_threads = max(1, min(len(os.sched_getaffinity(0)), 8))
