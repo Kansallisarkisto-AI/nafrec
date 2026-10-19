@@ -16,10 +16,18 @@ import site
 # Priority order: TensorRT (only if enabled) > CUDA on NVIDIA, ROCm > MIGraphX on AMD.
 GPU_PROVIDERS = ("TensorrtExecutionProvider",    # NVIDIA TensorRT (only if enable_tensorrt)
                  "CUDAExecutionProvider",        # NVIDIA regular CUDA
-                 "ROCMExecutionProvider",)        # AMD, ORT <= 1.22.1 (legacy)
+                 "ROCMExecutionProvider",        # AMD, ORT <= 1.22.1 (legacy)
+                 "MIGraphXExecutionProvider",)    # AMD, ORT >= 1.23
 
-# TODO: MIGraphX on AMD and ORT >= 1.23, unfortunately PP-OCRv6+MIGraphX is currently broken for unknown reasons on MI250X!
+# Note: Unfortunately PP-OCRv6+MIGraphX is currently broken for unknown reasons on MI250X!
 
+# Try to load migraphx libraries if they were installed in a side directory by migraphx wheels.
+d = os.path.join(site.getsitepackages()[0], "migraphx_libs")
+for lib in sorted(glob.glob(os.path.join(d, "*.so*"))):
+    try:
+        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        pass
 
 def _is_gpu_session(providers):
     """True if the primary provider (str or (name, options) tuple) is a GPU one."""
@@ -183,8 +191,8 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
         print("[info] GPU providers: " + ", ".join(active_gpu_provider_names))
 
         # Disable all optimizations for ROCm, otherwise an optimization will lead to uninitialized memory access for dynamic shapes
-        if "ROCMExecutionProvider" in active_gpu_provider_names:
-            option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        #if "ROCMExecutionProvider" in active_gpu_provider_names or "MIGraphXExecutionProvider" in active_gpu_provider_names:
+        #    option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         
         # all available GPU providers in priority order, generic CPU as last fallback
         return providers + ["CPUExecutionProvider"], option
@@ -253,13 +261,14 @@ class PPOCRRecognizer:
         self.session = _create_session(model_path, providers, options, fp16)
         self.input_name = self.session.get_inputs()[0].name
 
-        # MIGraphX compiles a static-shape program for the first input shape it sees, so a
+        # ROCm or MIGraphX compiles a static-shape program for the first input shape it sees, so a
         # different batch size later fails ("Incorrect shape ... for parameter"). Pad every
         # batch up to a fixed size and drop the extra outputs. pad_batch=None -> auto: on only
-        # when MIGraphX is the provider actually in use (get_providers() omits failed ones).
+        # when ROCm or MIGraphX is the provider actually in use (get_providers() omits failed ones).
         if pad_batch is None:
-            pad_batch = self.session.get_providers(
-            )[0] == "ROCMExecutionProvider"
+            pad_batch = (self.session.get_providers(
+            )[0] == "ROCMExecutionProvider" or self.session.get_providers(
+            )[0] == "MIGraphXExecutionProvider")
         self.pad_batch = bool(pad_batch)
         self._pad_to = batch_size
         if self.pad_batch:
