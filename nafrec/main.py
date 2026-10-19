@@ -341,6 +341,12 @@ def build_parser(library=False):
         help="PP-OCR minimum input width (scalable)"
     )
     parser.add_argument(
+        "--ppocr_img_width_max",
+        type=int,
+        default=3200,
+        help="PP-OCR maximum input width: text lines that would be wider are squeezed to this width. Must be >= --ppocr_img_width_min. With TensorRT this is also the max width of the shape profile."
+    )
+    parser.add_argument(
         "--ppocr_width_buckets",
         type=int,
         nargs="+",
@@ -717,6 +723,7 @@ def load_latin_recognizer(args, device):
             device=device,
             img_height=args.ppocr_img_height,
             img_width_min=args.ppocr_img_width_min,
+            img_width_max=args.ppocr_img_width_max,
             fp16=args.fp16_rec,
             width_buckets=args.ppocr_width_buckets,
             batch_size=args.ppocr_batch_size,

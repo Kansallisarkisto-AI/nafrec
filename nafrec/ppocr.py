@@ -27,7 +27,7 @@ def _is_gpu_session(providers):
     return (first[0] if isinstance(first, tuple) else first) in GPU_PROVIDERS
 
 
-MAX_REC_WIDTH = 3200  # RecPreProcess._max_w: wider lines are squeezed to this width
+MAX_REC_WIDTH = 3200  # default for RecPreProcess max_width: wider lines are squeezed to this width
 
 
 def build_trt_profile(input_name, img_height, img_width_min, width_buckets, batch_size,
@@ -232,15 +232,20 @@ class PPOCRRecognizer:
 
     def __init__(self, model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
                  width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False,
-                 pad_batch=None):
+                 pad_batch=None, img_width_max=MAX_REC_WIDTH):
         # Lazy imports so nafrec still works without onnxruntime / ppocrv6_onnx
         # when the PP-OCR path isn't used.
         from ppocrv6_onnx import RecPreProcess, CTCLabelDecode
 
+        if img_width_max < img_width_min:
+            raise ValueError(
+                f"ppocr_img_width_max ({img_width_max}) must be >= ppocr_img_width_min ({img_width_min})")
+
         trt_profile = None
         if enable_tensorrt and trt_dynamic_shapes and str(device).startswith("cuda"):
             trt_profile = build_trt_profile(_onnx_input_name(model_path), img_height, img_width_min,
-                                            width_buckets, batch_size, opt_width=trt_opt_width)
+                                            width_buckets, batch_size, max_width=img_width_max,
+                                            opt_width=trt_opt_width)
             print(
                 f"[info] TensorRT profile: min={trt_profile[1][0]} opt={trt_profile[1][1]} max={trt_profile[1][2]}")
         providers, options = _get_providers_and_options(
@@ -262,7 +267,8 @@ class PPOCRRecognizer:
                 f"[info] PP-OCR: padding batches to {batch_size} lines (fixed batch shape)")
 
         self.pre = RecPreProcess(rec_image_shape=(
-            3, img_height, img_width_min), width_buckets=width_buckets)
+            3, img_height, img_width_min), width_buckets=width_buckets,
+            max_width=img_width_max)
         self.post = CTCLabelDecode(char_dict_path)
 
         # PaddleOCR appends a trailing space class when Global.use_space_char=true
@@ -340,9 +346,10 @@ class PPOCRRecognizer:
 
 def load_ppocr_model(model_path, char_dict_path, device="cpu", img_height=48, img_width_min=320, fp16=False,
                      width_buckets=None, batch_size=32, trt_dynamic_shapes=True, trt_opt_width=None, enable_tensorrt=False,
-                     pad_batch=None):
+                     pad_batch=None, img_width_max=MAX_REC_WIDTH):
     return PPOCRRecognizer(model_path, char_dict_path, device, img_height, img_width_min, fp16, width_buckets,
-                           batch_size, trt_dynamic_shapes, trt_opt_width, enable_tensorrt, pad_batch)
+                           batch_size, trt_dynamic_shapes, trt_opt_width, enable_tensorrt, pad_batch,
+                           img_width_max)
 
 
 def get_ppocr_preds(data, recognizer):
