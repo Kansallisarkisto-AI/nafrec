@@ -179,7 +179,13 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
             providers.append((name, {"device_id": device_id}))
 
     if providers:
-        print("[info] GPU providers: " + ", ".join(p[0] for p in providers))
+        active_gpu_provider_names = [p[0] for p in providers]
+        print("[info] GPU providers: " + ", ".join(active_gpu_provider_names))
+
+        # Disable all optimizations for ROCm, otherwise an optimization will lead to uninitialized memory access for dynamic shapes
+        if "ROCMExecutionProvider" in active_gpu_provider_names:
+            option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+        
         # all available GPU providers in priority order, generic CPU as last fallback
         return providers + ["CPUExecutionProvider"], option
 
