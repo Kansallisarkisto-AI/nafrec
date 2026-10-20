@@ -145,7 +145,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
         # Special settings for CPU providers
         option.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-        # respect Slurm affinities
+        # respect possible Slurm or cgroup affinities
         option.intra_op_num_threads = max(1, min(len(os.sched_getaffinity(0)), os.cpu_count()))
         option.inter_op_num_threads = 1
 
@@ -213,7 +213,7 @@ def _create_session(model_path, providers, options=None, fp16=False):
     import onnxruntime as ort
 
     if options and options.intra_op_num_threads == 0:
-        # Respect the Slurm/cgroup allocation, not the host's core count,
+        # Respect possible Slurm/cgroup allocation, not the host's core count,
         # and set it explicitly so ORT doesn't try to pin threads to cores that are disallowed.
         options.intra_op_num_threads = max(1, min(len(os.sched_getaffinity(0)), 8))
         options.inter_op_num_threads = 1
