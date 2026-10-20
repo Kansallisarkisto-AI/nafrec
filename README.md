@@ -35,7 +35,7 @@ pip install nafrec[cpu]
 The following pre-trained models can be downloaded from Hugging Face:
 
 - Text line and text region detection:
-    - **RF-DETR Detection Model**: [https://huggingface.co/Kansallisarkisto/rfdetr_textline_textregion_detection_model](https://huggingface.co/Kansallisarkisto/rfdetr_textline_textregion_detection_model)
+    - **RF-DETR Detection Model 2XL**: [https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl](https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl)
 
 - Text type classification model:
     - **Cyrillic-latin Text Type Classification Model**: [https://huggingface.co/Kansallisarkisto/cyrillic-latin-textline-classifier](https://huggingface.co/Kansallisarkisto/cyrillic-latin-textline-classifier)
@@ -45,6 +45,10 @@ The following pre-trained models can be downloaded from Hugging Face:
     [https://huggingface.co/Kansallisarkisto/cyrillic-large-handwritten](https://huggingface.co/Kansallisarkisto/cyrillic-large-handwritten)
 
 - For texts using latin script the model can be chosen based on the language(s) used in the processed documents:
+    - **PP-OCRv6 Finnish-Swedish Recognition Model**: 
+    [https://huggingface.co/Kansallisarkisto/multicentury-ppocrv6-medium](https://huggingface.co/Kansallisarkisto/multicentury-ppocrv6-medium)
+    - **PP-OCRv6 Estonian Recognition Model**: 
+    [https://huggingface.co/Kansallisarkisto/estonian-ppocrv6-medium](https://huggingface.co/Kansallisarkisto/estonian-ppocrv6-medium)
     - **TrOCR Finnish-Swedish Recognition Model**: 
     [https://huggingface.co/Kansallisarkisto/multicentury-htr-model](https://huggingface.co/Kansallisarkisto/multicentury-htr-model)
     - **TrOCR Estonian Recognition Model**: 
@@ -79,13 +83,15 @@ nafrec \
     --input_folder /path/to/images/
 ```
 
+Most models including the cyrillic model are optional; many different combinations are supported.
+
 ### Notes
 
+Nvidia backends ("gpu" and "gpu-optimum") seem stable, but expect small differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (TODO: make this configurable).
+
+CPU backends ("cpu" and "cpu-openvino") seem stable overall.
+
 The AMD GPU execution providers for onnxruntime (ROCm and MIGraphX) are quite unstable. The ROCm provider seems to work on MI250X (only the first call fails, works after retrying), but only with completely static shapes i.e. padding batch size to be static and using the same minimum and maximum width. The MIGraphX provider runs on MI250X but gives incorrect results. MI300+ series and consumer AMD GPUs are untested. Paddle detection and layout models are currently untested on AMD GPUs.
-
-CPU backends ("cpu" and "cpu-openvino") seem relatively stable.
-
-Nvidia backends ("gpu" and "gpu-optimum") seem relatively stable, but expect differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (TODO: make this configurable).
 
 ### Arguments
 
