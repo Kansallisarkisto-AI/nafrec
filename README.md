@@ -89,36 +89,16 @@ Nvidia backends ("gpu" and "gpu-optimum") seem relatively stable, but expect dif
 
 ### Arguments
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--detection_model_path` | str | `/path/to/rfdetr/model.pth` | Path to the RF-DETR detection model file |
-| `--script_classification_model_path` | str | `/path/to/script/classification/model.pt` | Path to the script classification model file |
-| `--recognition_model_path` | str | `/path/to/trocr/model/folder/` | Path to the TrOCR recognition model folder |
-| `--cyrillic_recognition_model_path` | str | `/path/to/cyrillic/trocr/model/folder/` | Path to the cyrillic TrOCR recognition model folder |
-| `--processor_path` | str | `/path/to/trocr/processor/folder/` | Path to the TrOCR processor folder |
-| `--cyrillic_processor_path` | str | `/path/to/trocr/processor/folder/` | Path to the cyrillic TrOCR processor folder |
-| `--input_folder` | str | **required** | Path to folder containing input images |
-| `--region_model_name` | str | `rfdetr_text_seg_model_202510` | Region detection model name |
-| `--line_model_name` | str | `rfdetr_text_seg_model_202510` | Line detection model name |
-| `--script_classification_model_name` | str | `script_classifier_202610` | Script classification model name |
-| `--text_rec_model_name` | str | `202509_tf32` | Text recognition model name |
-| `--cyrillic_text_rec_model_name` | str | `cyrillic_large_202603` | Cyrillic text recognition model name |
-| `--trocr_batch_size` | int | 8 | Batch size for text recognition |
-| `--classifier_batch_size` | int | 32 | Batch size for script type classification |
-| `--classifier_default_label` | str | latin |Default label used by script type classifier in cases where all line classifications fail |
-| `--page_xml` | int | 0 | Whether to save output as PAGE XML (0 = no, 1 = yes) |
-| `--alto_xml` | int | 1 | Whether to save output as ALTO XML (0 = no, 1 = yes) |
-| `--output_json` | int | 0 | Whether to save output as .json file (0 = no, 1 = yes) |
-| `--xml_folder` | str | None | Custom path for XML output. If None, saves to `input_folder/alto` or `input_folder/page` |
-| `--json_folder` | str | None | Custom path for .json output. If None, saves to `input_folder/json` |
-| `--confidence_threshold` | float | 0.15 | Detection confidence threshold for filtering detections |
-| `--line_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small line polygons (applies to both `rfdetr` and `paddle` detectors) |
-| `--region_percentage_threshold` | float | 7e-05 | Threshold value for filtering out small region polygons (applies to both detectors) |
-| `--line_iou` | float | 0.3 | Threshold value for merging lines based on intersection over union (IoU) (applies to both detectors) |
-| `--region_iou` | float | 0.3 | Threshold value for merging regions based on intersection over union (IoU) (applies to both detectors) |
-| `--line_overlap_threshold` | float | 0.5 | Threshold value for merging lines based on overlapping area (applies to both detectors) |
-| `--region_overlap_threshold` | float | 0.5 | Threshold value for merging regions based on overlapping area (applies to both detectors) |
-| `--sliver_threshold` | float | 0.01 | Given as a proportion of the smaller dimension of the image, so 0.01 would be 1% of the shorter side. Text lines thinner than this threshold will be discarded. |
+See [ARGS.md](ARGS.md)
+
+#### Choosing models
+
+- **Latin only, or cyrillic only:** configure just one recognition model. Script classification is disabled and all lines go to that model.
+- **Latin and cyrillic:** configure both recognition models (and their processors) plus `--script_classification_model_path`. Each line is classified as `latin` or `cyrillic` and sent to the matching model.
+- **PP-OCRv6 for latin:** add `--use_ppocr --ppocr_model_path ...` instead of `--recognition_model_path` / `--processor_path`. The cyrillic model, if used, stays TrOCR.
+- **Detection:** the default is RF-DETR. Use `--detector paddle` with `--paddle_det_model_path` (and optionally `--paddle_layout_model_path`) for the Paddle backend.
+
+nafrec checks these combinations at startup and reports missing options before processing begins.
 
 ### Example
 ```bash
@@ -131,9 +111,42 @@ nafrec \
     --cyrillic_processor_path /path/to/cyrillic/trocr/processor/folder/ \
     --input_folder /path/to/images/ \
     --confidence_threshold 0.2 \
-    --page_xml True \
+    --page_xml 1 \
     --xml_folder /output/path
 ```
+
+### More examples
+
+Latin-script lines recognized with PP-OCRv6, Paddle detection with a layout model, on two GPUs with fp16 and TensorRT:
+```bash
+nafrec \
+    --input_folder /path/to/images/ \
+    --detector paddle \
+    --paddle_det_model_path /path/to/det.onnx \
+    --paddle_layout_model_path /path/to/layout.onnx \
+    --paddle_layout_ignore_classes image chart seal \
+    --use_ppocr \
+    --ppocr_model_path /path/to/rec.onnx \
+    --gpu_ids 0 1 \
+    --fp16_det --fp16_rec \
+    --enable_tensorrt
+```
+
+RF-DETR with tiled detection on CPU only:
+```bash
+nafrec \
+    --input_folder /path/to/images/ \
+    --detection_model_path /path/to/rfdetr/model.pth \
+    --recognition_model_path /path/to/trocr/model/folder/ \
+    --processor_path /path/to/trocr/processor/folder/ \
+    --device cpu \
+    --cpu_processes 4 \
+    --tile_size 768
+```
+
+### Python API
+
+nafrec can also be used as a library, for example to keep the models loaded and process images on request, or to supply your own text lines. See [USAGE.md](USAGE.md).
 
 ## Output
 
@@ -143,7 +156,7 @@ The pipeline generates XML files (ALTO or PAGE format) containing:
 - Recognized text for each line
 - Model metadata and confidence scores
 
-Optionally also output files in .json format can be generated. They contain for each image
+By default a .json file is also written for each image (disable with `--output_json 0`). It contains for each image
 - Image name
 - Image height
 - Image width
