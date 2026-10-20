@@ -48,11 +48,14 @@ classifiers = ["Programming Language :: Python"]
 [project.optional-dependencies]
 cpu = ["onnxruntime>=1.18"]
 cpu-openvino = ["onnxruntime-openvino>=1.18"]
-gpu = ["onnxruntime-gpu>=1.18"]
+gpu = ["onnxruntime-gpu>=1.18", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
 gpu-optimum = [
   "onnxruntime-gpu>=1.18",
   "optimum-onnx@git+https://github.com/Kansallisarkisto-AI/optimum-onnx.git@xadupre/transformers5",
   "optimum",
+  "tensorrt-cu13<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu13-bindings<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu13-libs<11",  # TensorRT < 11 to avoid obscure bug
 ]
 gpu-amd-rocm = [
   "onnxruntime-rocm",

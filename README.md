@@ -16,6 +16,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python 3.12
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
+# Install correct version of PyTorch for cpu, AMD ROCm or CUDA 13.x
+...
+
 # Install package (choose cpu or gpu)
 uv pip install nafrec[cpu]
 ```
@@ -26,6 +29,9 @@ uv pip install nafrec[cpu]
 # Use Python 3.12
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install correct version of PyTorch for cpu, AMD ROCm or CUDA 13.x
+...
 
 # Install package (choose cpu or gpu)
 pip install nafrec[cpu]
@@ -90,7 +96,7 @@ Most models including the cyrillic model are optional; many different combinatio
 
 ### Notes
 
-Nvidia backends ("gpu" and "gpu-optimum") seem stable, but expect small differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (in the future we might make this configurable).
+Nvidia backends ("gpu" and "gpu-optimum") seem stable, but expect small differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (in the future we might make this configurable). This backend is currently configured for CUDA 13.x.
 
 CPU backends ("cpu" and "cpu-openvino") seem stable overall.
 
@@ -100,13 +106,13 @@ This package is designed to rely on Hugging Face transformers, ONNX Runtime and 
 
 Our fine-tuned PP-OCRv6 medium models use a raised image height of 96 px compared to the default of 48 px, so they are only guaranteed to work with this package. Most other packages have hardcoded width or height limits that are unsuitable.
 
-#### Package extras
+#### Choosing package extras
 | Extra | Description |
-|----------|-------------|
+|-------|-------------|
 cpu | Basic CPU backend
 cpu-openvino | CPU backend with Intel OpenVINO acceleration for ONNX models
-gpu | Basic Nvidia GPU backend
-gpu-optimum | Nvidia GPU backend with optimum-onnx acceleration for TrOCR models (xadupre/transformers5 feature branch ahead of release version)
+gpu | Basic Nvidia GPU backend, also installs correct TensorRT for CUDA 13.x
+gpu-optimum | Same as basic Nvidia GPU backend with optimum-onnx acceleration for TrOCR models (xadupre/transformers5 feature branch ahead of release version)
 gpu-amd-rocm | Older AMD GPU backend compatible with MI250X (ROCm 7.0.2)
 gpu-amd-migraphx | Newer AMD GPU backend, possibly compatible with MI300 series (ROCm 7.2.4)
 
