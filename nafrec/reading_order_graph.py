@@ -153,7 +153,8 @@ class GraphBasedOrdering:
                 node = min(
                     remaining,
                     key=lambda i: (
-                        features[i]['anchor'][1],
+                        in_degree[i],  # cycle-break: pick the node with the lowest number of unemitted predecessors (violates the fewest constraints)
+                        features[i]['anchor'][1],  # break ties by taking minimum y and x (or max in case of right-to-left order)
                         features[i]['anchor'][0] if self.text_direction == 'lr' else -
                         features[i]['anchor'][0]
                     )
@@ -161,7 +162,7 @@ class GraphBasedOrdering:
             else:
                 # regular case
                 node = queue.popleft()
-                
+
                 # skip nodes already force-picked during a cycle break
                 if node in result:
                     continue
