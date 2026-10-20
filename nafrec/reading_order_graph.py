@@ -161,6 +161,10 @@ class GraphBasedOrdering:
             else:
                 # regular case
                 node = queue.popleft()
+                
+                # skip nodes already force-picked during a cycle break
+                if node in result:
+                    continue
 
             result.append(node)
 
