@@ -124,7 +124,7 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
     label: model name for log messages.
     """
     import onnxruntime as ort
-    # ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
+    ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
     device = str(device)
     # get available providers
