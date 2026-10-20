@@ -126,6 +126,12 @@ def _get_providers_and_options(device, trt_profile=None, enable_tensorrt=False, 
     import onnxruntime as ort
     ort.preload_dlls()   # loads CUDA/cuDNN from pip wheels (or system paths)
 
+    # try to preload TensorRT dlls from package
+    try:
+        import tensorrt
+    except:
+        pass
+
     device = str(device)
     # get available providers
     available = ort.get_available_providers()
