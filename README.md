@@ -13,7 +13,7 @@ This project uses `pyproject.toml` for dependency management. You can install th
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create a virtual environment and activate it
-uv venv
+uv venv --python 3.12
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install package (choose cpu or gpu)
@@ -23,6 +23,7 @@ uv pip install nafrec[cpu]
 ### Using pip with venv
 ```bash
 # Create a virtual environment and activate it
+# Use Python 3.12
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
