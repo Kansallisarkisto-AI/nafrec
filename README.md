@@ -100,6 +100,16 @@ This package is designed to rely on Hugging Face transformers, ONNX Runtime and 
 
 Our fine-tuned PP-OCRv6 medium models use a raised image height of 96 px compared to the default of 48 px, so they are only guaranteed to work with this package. Most other packages have hardcoded width or height limits that are unsuitable.
 
+#### Package extras
+| Extra | Description |
+|----------|-------------|
+cpu | Basic CPU backend
+cpu-openvino | CPU backend with Intel OpenVINO acceleration for ONNX models
+gpu | Basic Nvidia GPU backend
+gpu-optimum | Nvidia GPU backend with optimum-onnx acceleration for TrOCR models (xadupre/transformers5 feature branch ahead of release version)
+gpu-amd-rocm | Older AMD GPU backend compatible with MI250X (ROCm 7.0.2)
+gpu-amd-migraphx | Newer AMD GPU backend, possibly compatible with MI300 series (ROCm 7.2.4)
+
 ### Arguments
 
 See [ARGS.md](ARGS.md)

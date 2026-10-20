@@ -9,7 +9,6 @@ from shapely.prepared import prep
 from collections import defaultdict
 import torch
 from PIL import Image
-from supervision.detection.utils.iou_and_nms import OverlapFilter, OverlapMetric
 from supervision import InferenceSlicer
 
 
@@ -580,7 +579,6 @@ def predict_masks(model,
         # Predict in slices. InferenceSlicer  ensures that slices do not exceed the boundaries of the original image.
         # As a result, the final slices in the row and column dimensions might be smaller than the specified slice dimensions,
         # if the image's width or height is not a multiple of the slice's width or height minus the overlap.
-        # slicer = InferenceSlicer(tiling_callback, slice_wh=tile_size, overlap_wh=tile_overlap, iou_threshold=tile_iou_threshold, overlap_metric=OverlapMetric.IOU, overlap_filter=OverlapFilter.NON_MAX_SUPPRESSION, batch_size=tile_batch_size)
         slicer = InferenceSlicer(callback=tiling_callback, slice_wh=(tile_size, tile_size), overlap_wh=(
             tile_overlap, tile_overlap), iou_threshold=tile_iou_threshold, compact_masks=True, batch_size=tile_batch_size)
         detections = slicer(preprocessed_image)
