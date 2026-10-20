@@ -79,7 +79,7 @@ PP-OCRv6 (ONNX) can be used instead of TrOCR for latin-script lines. The cyrilli
 | `--ppocr_img_height` | int | 96 | PP-OCR input height. Must match training (e.g. 96 for a custom NAF model) |
 | `--ppocr_img_width_min` | int | 320 | PP-OCR minimum input width |
 | `--ppocr_img_width_max` | int | 3200 | PP-OCR maximum input width. Text lines that would be wider are squeezed to this width. Must be >= `--ppocr_img_width_min`. With TensorRT this is also the maximum width of the shape profile |
-| `--ppocr_width_buckets` | int (one or more) | None | Pad each batch's input width up to the smallest of these bucket widths (e.g. `320 640 1280 2560`), so that the model sees only a few distinct input shapes. Batches wider than the largest bucket keep their natural width. Default: no bucketing |
+| `--ppocr_width_buckets` | int (one or more) | None | Pad each batch's input width up to the smallest of these bucket widths (e.g. `320 640 1280 1536 3200`), so that the model sees only a few distinct input shapes. Batches wider than the largest bucket keep their natural width. Default: no bucketing |
 | `--ppocr_batch_size` | int | 32 | Batch size for PP-OCR text recognition |
 | `--ppocr_pad_batch` | str | `auto` | Pad every PP-OCR batch (including the last partial one and single-line retries) to `--ppocr_batch_size`, so that the model always sees the same batch shape. Choices: `auto`, `on`, `off`. MIGraphX compiles for one fixed shape and fails on others; `auto` turns padding on only when MIGraphX is the active execution provider |
 

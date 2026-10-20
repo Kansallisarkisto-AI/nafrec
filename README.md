@@ -87,11 +87,15 @@ Most models including the cyrillic model are optional; many different combinatio
 
 ### Notes
 
-Nvidia backends ("gpu" and "gpu-optimum") seem stable, but expect small differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (TODO: make this configurable).
+Nvidia backends ("gpu" and "gpu-optimum") seem stable, but expect small differences if TensorRT is enabled. TensorRT will need to write engine caches into the working directory (in the future we might make this configurable).
 
 CPU backends ("cpu" and "cpu-openvino") seem stable overall.
 
 The AMD GPU execution providers for onnxruntime (ROCm and MIGraphX) are quite unstable. The ROCm provider seems to work on MI250X (only the first call fails, works after retrying), but only with completely static shapes i.e. padding batch size to be static and using the same minimum and maximum width. The MIGraphX provider runs on MI250X but gives incorrect results. MI300+ series and consumer AMD GPUs are untested. Paddle detection and layout models are currently untested on AMD GPUs.
+
+This package is designed to rely on Hugging Face transformers, ONNX Runtime and Roboflow rfdetr libraries only, Paddlepaddle is not a dependency and all pre/postprocessing is handled by this library or our fork of [ppocrv6_onnx](https://github.com/Kansallisarkisto-AI/ppocrv6_onnx). For this reason, the results with Paddle models can differ slightly from Paddlepaddle results.
+
+Our fine-tuned PP-OCRv6 medium models use a raised image height of 96 px compared to the default of 48 px, so they are only guaranteed to work with this package. Most other packages have hardcoded width or height limits that are unsuitable.
 
 ### Arguments
 
