@@ -172,11 +172,11 @@ By default a .json file is also written for each image (disable with `--output_j
 - Image name
 - Image height
 - Image width
-- Page level mean of TrOCR row confidence values
-- Page level median of TrOCR row confidence values
-- Page level 25. percentile of TrOCR row confidence values
-- Page level 75. percentile of TrOCR row confidence values
-- Number of rows where TrOCR model generated over 100 characters 
+- Page level mean of recognition row confidence values
+- Page level median of recognition row confidence values
+- Page level 25. percentile of recognition row confidence values
+- Page level 75. percentile of recognition row confidence values
+- Number of rows where recognition model generated over 100 characters 
 - Predicted (majority) language of the recognized text
 - Text region detection confidences
 - Text region polygons
