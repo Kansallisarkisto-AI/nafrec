@@ -35,7 +35,9 @@ pip install nafrec[cpu]
 The following pre-trained models can be downloaded from Hugging Face:
 
 - Text line and text region detection:
-    - **RF-DETR Detection Model 2XL**: [https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl](https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl)
+    - **RF-DETR Line and Region Detection Model 2XL**: [https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl](https://huggingface.co/Kansallisarkisto/rfdetr-textline-textregion-detection-2xl)
+    - **PP-DocLayout_plus-L Region Detection Model**: [https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L_onnx](https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L_onnx)
+    - **PP-OCRv6 Medium Line Detection Model**: [https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx)
 
 - Text type classification model:
     - **Cyrillic-latin Text Type Classification Model**: [https://huggingface.co/Kansallisarkisto/cyrillic-latin-textline-classifier](https://huggingface.co/Kansallisarkisto/cyrillic-latin-textline-classifier)
