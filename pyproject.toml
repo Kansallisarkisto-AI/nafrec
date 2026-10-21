@@ -21,7 +21,7 @@ dependencies = [
   "psutil>=5.9",
   "tqdm",
   "torch>=2.4.0",
-  "transformers==5.10.4",
+  "transformers>=5.10.4,<6",
   "yattag>=1.16.1",
   "supervision>=0.30.9",
   "huggingface-hub>=1.19.0",
@@ -49,10 +49,10 @@ classifiers = ["Programming Language :: Python"]
 cpu = ["onnxruntime>=1.18"]
 cpu-openvino = ["onnxruntime-openvino>=1.18"]
 gpu = ["onnxruntime-gpu>=1.18", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
-gpu-cu12 = ["onnxruntime-gpu>=1.18", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
+gpu-cu12 = ["onnxruntime-gpu>=1.18", "tensorrt-cu12<11", "tensorrt-cu12-bindings<11", "tensorrt-cu12-libs<11"]  # TensorRT < 11 to avoid obscure bug
 gpu-optimum = [
   "onnxruntime-gpu>=1.18",
-  "optimum-onnx@git+https://github.com/Kansallisarkisto-AI/optimum-onnx.git@xadupre/transformers5",
+  "optimum-onnx-naf",
   "optimum",
   "tensorrt-cu13<11",  # TensorRT < 11 to avoid obscure bug
   "tensorrt-cu13-bindings<11",  # TensorRT < 11 to avoid obscure bug
@@ -60,7 +60,7 @@ gpu-optimum = [
 ]
 gpu-cu12-optimum = [
   "onnxruntime-gpu>=1.18",
-  "optimum-onnx@git+https://github.com/Kansallisarkisto-AI/optimum-onnx.git@xadupre/transformers5",
+  "optimum-onnx-naf",
   "optimum",
   "tensorrt-cu12<11",  # TensorRT < 11 to avoid obscure bug
   "tensorrt-cu12-bindings<11",  # TensorRT < 11 to avoid obscure bug
@@ -68,12 +68,12 @@ gpu-cu12-optimum = [
 ]
 gpu-amd-rocm = [
   "onnxruntime-rocm",
-  "optimum-onnx@git+https://github.com/Kansallisarkisto-AI/optimum-onnx.git@xadupre/transformers5",
+  "optimum-onnx-naf",
   "optimum",
 ]
 gpu-amd-migraphx = [
   "onnxruntime-migraphx",
-  "optimum-onnx@git+https://github.com/Kansallisarkisto-AI/optimum-onnx.git@xadupre/transformers5",
+  "optimum-onnx-naf",
   "optimum",
   "migraphx",
   "migraphx-libs",
