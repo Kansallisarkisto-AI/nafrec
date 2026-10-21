@@ -8,6 +8,7 @@ An HTR and OCR pipeline for historical text recognition, which classifies text l
 This project uses `pyproject.toml` for dependency management. You can install the required packages using one of the following methods:
 
 ### Using uv (recommended)
+uv works for all supported platforms including ROCm.
 ```bash
 # Install uv if you haven't already
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -24,6 +25,7 @@ uv pip install git+https://github.com/Kansallisarkisto-AI/nafrec.git[cpu]
 ```
 
 ### Using pip with venv
+pip will not work with the ROCm extra.
 ```bash
 # Create a virtual environment and activate it
 # Use Python 3.12
