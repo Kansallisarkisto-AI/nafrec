@@ -148,7 +148,7 @@ class GraphBasedOrdering:
         while queue or len(result) < n:
             # check special case requiring cycle break: queue empty but all nodes haven't been processed yet
             if not queue:
-                # cycle-break: force-pick the next most plausible node, sorted by x and y
+                # cycle-break: force-pick the next most plausible node, sorted by in-degrees, x and y
                 remaining = set(range(n)) - set(result)
                 node = min(
                     remaining,
