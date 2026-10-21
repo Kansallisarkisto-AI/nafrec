@@ -18,10 +18,10 @@ uv venv --python 3.12
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install correct version of PyTorch for cpu, AMD ROCm or CUDA 13.x
-...
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
 
 # Install package (choose cpu or gpu)
-uv pip install git+https://github.com/Kansallisarkisto-AI/nafrec.git[cpu]
+uv pip install nafrec[gpu]
 ```
 
 ### Using pip with venv
@@ -33,10 +33,10 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install correct version of PyTorch for cpu, AMD ROCm or CUDA 13.x
-...
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
 
 # Install package (choose cpu or gpu)
-pip install git+https://github.com/Kansallisarkisto-AI/nafrec.git[cpu]
+pip install nafrec[gpu]
 ```
 
 ## Models
