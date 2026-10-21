@@ -20,7 +20,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ...
 
 # Install package (choose cpu or gpu)
-uv pip install nafrec[cpu]
+uv pip install git+https://github.com/Kansallisarkisto-AI/nafrec.git[cpu]
 ```
 
 ### Using pip with venv
@@ -34,7 +34,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ...
 
 # Install package (choose cpu or gpu)
-pip install nafrec[cpu]
+pip install git+https://github.com/Kansallisarkisto-AI/nafrec.git[cpu]
 ```
 
 ## Models
