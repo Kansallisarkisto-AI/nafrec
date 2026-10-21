@@ -27,7 +27,7 @@ dependencies = [
   "huggingface-hub>=1.19.0",
   "onnx",
   "onnxconverter-common>=1.14",                                               # runtime fp16 conversion (--fp16_rec/--fp16_det)
-  "ppocrv6_onnx@git+https://github.com/Kansallisarkisto-AI/ppocrv6_onnx.git",
+  "ppocrv6-onnx-naf>=0.1.0",
 ]
 
 authors = [
