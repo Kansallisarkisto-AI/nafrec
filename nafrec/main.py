@@ -874,10 +874,10 @@ def worker_specs(args, devices):
     return [(d, ("rec", "det")) for d in devices]
 
 
-def start_inference_workers(ctx, args, devices, queues, inference_results):
+def start_inference_workers(ctx, args, devices, queues, inference_results, results_cond):
     workers = [
         ctx.Process(target=inference_worker_loop,
-                    args=(args, device, queues, inference_results, roles))
+                    args=(args, device, queues, inference_results, results_cond, roles))
         for device, roles in worker_specs(args, devices)
     ]
     for w in workers:
@@ -895,18 +895,37 @@ def stop_inference_workers(args, devices, workers, queues):
         w.join()
 
 
+# How long a worker serving several queues blocks on the last one before re-checking
+# the others. Bounds the extra latency for tasks in the other queues.
+MULTI_QUEUE_WAIT_S = 0.05
+
+
 def next_task(queues, roles):
-    """Block until a task (or the None stop signal) is available in any of the role queues; returns (role, task)."""
+    """
+    Block until a task (or the None stop signal) is available in one of the role queues,
+    taking roles in priority order; returns (role, task).
+
+    A single role blocks on its queue. With several roles, all but the last are checked
+    without blocking, then the worker blocks on the last one with a timeout. A task for
+    that queue wakes the worker immediately; tasks for the others wait at most
+    MULTI_QUEUE_WAIT_S.
+    """
+    if len(roles) == 1:
+        return roles[0], queues[roles[0]].get()
     while True:
-        for role in roles:
+        for role in roles[:-1]:
             try:
                 return role, queues[role].get_nowait()
             except queue.Empty:
                 pass
-        time.sleep(0.005)
+        try:
+            return roles[-1], queues[roles[-1]].get(timeout=MULTI_QUEUE_WAIT_S)
+        except queue.Empty:
+            pass
 
 
-def inference_worker_loop(args, device_string, queues, inference_results, roles=("rec", "det")):
+def inference_worker_loop(args, device_string, queues, inference_results, results_cond,
+                          roles=("rec", "det")):
     """
     Model worker: pins itself to one device, loads the models needed for its roles
     ("det" and/or "rec"), then serves tasks from the queues of those roles until it
@@ -962,11 +981,12 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
             else:
                 raise ValueError(f"Unknown GPU task kind: {kind}")
 
-            inference_results[request_id] = {"ok": True, "result": result}
+            publish_result(inference_results, results_cond, request_id,
+                           {"ok": True, "result": result})
 
         except Exception:
-            inference_results[request_id] = {
-                "ok": False, "error": traceback.format_exc()}
+            publish_result(inference_results, results_cond, request_id,
+                           {"ok": False, "error": traceback.format_exc()})
 
         finally:
             queues[role].task_done()
@@ -975,20 +995,28 @@ def inference_worker_loop(args, device_string, queues, inference_results, roles=
 _INFERENCE_REQUEST_COUNTER = itertools.count()
 
 
-def run_inference_task(queues, inference_results, device_slots, kind, payload):
+def publish_result(inference_results, results_cond, request_id, result):
+    """Model worker side: store a result and wake up the CPU processes waiting for results."""
+    with results_cond:
+        inference_results[request_id] = result
+        results_cond.notify_all()
+
+
+def run_inference_task(queues, inference_results, results_cond, device_slots, kind, payload):
     """Submit a task to the queue for its kind and block until a model worker has produced the result."""
     request_id = f"{os.getpid()}-{next(_INFERENCE_REQUEST_COUNTER)}"
 
     device_slots.acquire()
     try:
         queues[TASK_QUEUE[kind]].put((kind, request_id, payload))
-        while True:
-            result = inference_results.pop(request_id, None)
-            if result is not None:
-                if result["ok"]:
-                    return result["result"]
-                raise RuntimeError(result["error"])
-            time.sleep(0.01)
+        # The predicate is re-checked under the lock, so a result published between
+        # put() and wait() is never missed; wait_for sleeps until notify_all().
+        with results_cond:
+            results_cond.wait_for(lambda: request_id in inference_results)
+            result = inference_results.pop(request_id)
+        if result["ok"]:
+            return result["result"]
+        raise RuntimeError(result["error"])
     finally:
         device_slots.release()
 
@@ -1000,12 +1028,12 @@ def run_inference_task(queues, inference_results, device_slots, kind, payload):
 _CPU_STATE = {}
 
 
-def init_cpu_worker(args, queues, inference_results, device_slots):
+def init_cpu_worker(args, queues, inference_results, results_cond, device_slots):
     # We are parallelising with processes; avoid thread oversubscription.
     cv2.setNumThreads(1)
     torch.set_num_threads(1)
-    _CPU_STATE.update(args=args, queues=queues,
-                      results=inference_results, slots=device_slots)
+    _CPU_STATE.update(args=args, queues=queues, results=inference_results,
+                      cond=results_cond, slots=device_slots)
 
 
 def detect_polygons(image_path):
@@ -1015,10 +1043,10 @@ def detect_polygons(image_path):
     region_max_mins, image_shape).
     """
     args = _CPU_STATE["args"]
-    q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
+    q, res, cond, slots = (_CPU_STATE[k] for k in ("queues", "results", "cond", "slots"))
 
     detection_result = run_inference_task(
-        q, res, slots, "predict_polygons", {"image_path": image_path})
+        q, res, cond, slots, "predict_polygons", {"image_path": image_path})
     # Mask -> polygon post-processing runs here in the CPU worker, not in the model worker
     return postprocess_detection(detection_result, args)
 
@@ -1033,7 +1061,7 @@ def recognize_lines(image_path, ordered_lines, return_model_type=False):
     (None, None, None).
     """
     nothing = (None, None, None) if return_model_type else (None, None)
-    q, res, slots = _CPU_STATE["queues"], _CPU_STATE["results"], _CPU_STATE["slots"]
+    q, res, cond, slots = (_CPU_STATE[k] for k in ("queues", "results", "cond", "slots"))
 
     flat_polygons, flat_confs, n_lines = flatten_lines(ordered_lines)
     if not flat_polygons:
@@ -1044,7 +1072,7 @@ def recognize_lines(image_path, ordered_lines, return_model_type=False):
     del image
 
     text_predictions, htr_model_name, htr_model_type = run_inference_task(
-        q, res, slots, "classify_and_recognize",
+        q, res, cond, slots, "classify_and_recognize",
         {"cropped_lines": cropped_lines,
          "line_polygons": flat_polygons,
          "line_confs": flat_confs})
@@ -1185,10 +1213,11 @@ def main(args):
     queues = {role: manager.JoinableQueue(
         maxsize=args.inference_in_flight_limit) for role in ("det", "rec")}
     inference_results = manager.dict()
+    results_cond = manager.Condition()
     device_slots = manager.BoundedSemaphore(args.inference_in_flight_limit)
 
     inference_workers = start_inference_workers(
-        ctx, args, devices, queues, inference_results)
+        ctx, args, devices, queues, inference_results, results_cond)
 
     n_ok = n_err = 0
     # lines in images after the first (matches the timing window)
@@ -1199,7 +1228,7 @@ def main(args):
         with ctx.Pool(
             processes=cpu_processes,
             initializer=init_cpu_worker,
-            initargs=(args, queues, inference_results, device_slots),
+            initargs=(args, queues, inference_results, results_cond, device_slots),
         ) as pool:
             for image_path, status, msg in tqdm(
                 pool.imap_unordered(process_single_image, images, chunksize=1),
