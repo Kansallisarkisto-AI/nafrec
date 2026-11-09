@@ -1,4 +1,4 @@
-from .utils import load_image_paths, get_default_region, get_line_regions, order_regions_lines, flatten_lines, process_text_predictions, get_page_stats, save_json_output
+from .utils import load_image_paths, get_default_region, get_line_regions, order_regions_lines, flatten_lines, process_text_predictions, save_json_output
 from .script_classifier import load_classification_model, classify_lines
 from .image_processing import load_with_torchvision, crop_lines
 from .paddle_layout import load_paddle_layout_model
@@ -6,6 +6,7 @@ from .seg_inference import load_rfdetr_model, predict_masks, masks_to_polygons, 
 from .ppocr import load_ppocr_model, get_ppocr_preds, PPOCRRecognizer
 from .trocr import get_text_preds, load_trocr_model
 from .xml_output import save_xml
+from .page_stats import add_page_info
 from .model_types import ModelType, combine_recognition_types
 import torch
 import os
@@ -656,6 +657,22 @@ def build_model_config(recognition_model=None, processor=None, cyrillic_recognit
         raise ValueError("At least one recognition model is required")
     return config
 
+def build_page(text_predictions, ordered_lines, n_lines, image_path):
+    """
+    Combines the text predictions (one dict per line, in the order of the flattened
+    polygons) with the ordered regions into a page dict (format: see alto_writer.py),
+    and adds the page statistics and language.
+    """
+    height, width = ordered_lines[0]['img_shape']
+    page = process_text_predictions(
+        text_predictions, ordered_lines, n_lines, str(image_path), width, height)
+    return add_page_info(page)
+ 
+ 
+def page_line_count(page):
+    """Number of text lines on a page dict."""
+    return sum(len(region["lines"]) for region in page["regions"])
+
 
 def classify_and_recognize(
     image_path,
@@ -674,8 +691,8 @@ def classify_and_recognize(
     Any of recognition_model / cyrillic_recognition_model / classification_model may be None
     (see build_model_config / classify_or_skip).
 
-    Returns (preds, trocr_model_name), or (None, None) if there was
-    nothing to transcribe.
+    Returns (page, trocr_model_name), or (None, None) if there was
+    nothing to transcribe. page is a page dict (format: see alto_writer.py).
     """
     # Load image file
     image = load_with_torchvision(image_path)
@@ -700,19 +717,11 @@ def classify_and_recognize(
         args
     )
     if text_predictions:
-        # Add page level stats to line level prediction results
-        height, width = ordered_lines[0]['img_shape']
-        image_name = Path(image_path).name
-        lines_dict = get_page_stats(
-            text_predictions, image_name, height, width)
-        # Combine text region predictions with output data
-        preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
-        return preds, trocr_model_name
+        return build_page(text_predictions, ordered_lines, n_lines, image_path), trocr_model_name
     else:
         # No lines to transcribe (e.g. detection found regions but no
         # actual lines within them)
         return None, None
-
 
 def load_latin_recognizer(args, device):
     """Returns (recognition_model, processor). processor is None for PP-OCR."""
@@ -1053,11 +1062,12 @@ def detect_polygons(image_path):
 
 def recognize_lines(image_path, ordered_lines, return_model_type=False):
     """
-    CPU worker: cropping -> classification + recognition request -> page stats.
+    CPU worker: cropping -> classification + recognition request -> page dict with stats.
     ordered_lines: regions as returned by order_regions_lines (each with 'lines',
     'line_confs', 'img_shape', ...); any caller-supplied line polygons work.
-    Returns (preds, htr_model_name), or (None, None) when there was nothing to transcribe.
-    With return_model_type=True returns (preds, htr_model_name, htr_model_type), or
+    Returns (page, htr_model_name), or (None, None) when there was nothing to transcribe.
+    page is a page dict (format: see alto_writer.py) with page statistics and language.
+    With return_model_type=True returns (page, htr_model_name, htr_model_type), or
     (None, None, None).
     """
     nothing = (None, None, None) if return_model_type else (None, None)
@@ -1080,20 +1090,17 @@ def recognize_lines(image_path, ordered_lines, return_model_type=False):
     if not text_predictions:
         return nothing
 
-    height, width = ordered_lines[0]['img_shape']
-    lines_dict = get_page_stats(
-        text_predictions, Path(image_path).name, height, width)
-    preds = process_text_predictions(lines_dict, ordered_lines, n_lines)
+    page = build_page(text_predictions, ordered_lines, n_lines, image_path)
     if return_model_type:
-        return preds, htr_model_name, htr_model_type
-    return preds, htr_model_name
+        return page, htr_model_name, htr_model_type
+    return page, htr_model_name
 
 
 def predict_single_image(image_path):
     """
     CPU worker: detect_polygons -> ordering -> recognize_lines.
-    Returns (preds, xml_input, msg). preds/xml_input are exactly what get_xml(preds, xml_input)
-    (and save_json_output(preds, ...)) take; both are None, with an explanation in msg,
+    Returns (page, xml_input, msg). page/xml_input are exactly what save_xml(page, xml_input)
+    (and save_json_output(page, ...)) take; both are None, with an explanation in msg,
     when there was nothing to output.
     """
     args = _CPU_STATE["args"]
@@ -1121,9 +1128,9 @@ def predict_single_image(image_path):
     if not ordered_lines:
         return None, None, "no lines/regions detected, skipping output"
 
-    preds, htr_model_name, text_recognition_model_type = recognize_lines(
+    page, htr_model_name, text_recognition_model_type = recognize_lines(
         image_path, ordered_lines, return_model_type=True)
-    if preds is None:
+    if page is None:
         return None, None, "no transcribable lines found, skipping output"
 
     # Infer used model types and provide to XML input
@@ -1159,7 +1166,7 @@ def predict_single_image(image_path):
         text_recognition_model_name=htr_model_name,
         text_recognition_model_type=text_recognition_model_type,
     )
-    return preds, xml_input, ""
+    return page, xml_input, ""
 
 
 def process_single_image(image_path):
@@ -1169,14 +1176,14 @@ def process_single_image(image_path):
     """
     args = _CPU_STATE["args"]
     try:
-        preds, xml_input, msg = predict_single_image(image_path)
-        if preds is None:
+        page, xml_input, msg = predict_single_image(image_path)
+        if page is None:
             return image_path, "info", msg
-        save_xml(preds, xml_input)
+        save_xml(page, xml_input)
         if args.output_json:
-            save_json_output(preds, image_path, args)
+            save_json_output(page, image_path, args)
         # n lines sent to recognition
-        return image_path, "ok", sum(len(r["text_lines"]) for r in preds)
+        return image_path, "ok", sum(len(r["text_lines"]) for r in page)
     except Exception:
         return image_path, "error", traceback.format_exc()
 
