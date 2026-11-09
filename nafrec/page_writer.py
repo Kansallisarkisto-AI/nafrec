@@ -2,7 +2,7 @@
 PAGE XML (2013-07-15) writer for the HTR and OCR components.
 Page format: see the module docstring of alto_writer.py.
 
-    write_page_xml(page, path)
+    write_page_xml(page, path, comments=None)
 """
 
 import datetime
@@ -20,7 +20,20 @@ def format_polygon(polygon):
     return " ".join(f"{max(int(x), 0)},{max(int(y), 0)}" for x, y in polygon)
 
 
-def build_page_xml(page):
+def _region_polygon(region):
+    """The region's polygon, or the bounding box of its lines; None if it has neither."""
+    polygon = region.get("polygon")
+    if polygon is not None and len(polygon) > 0:
+        return polygon
+    points = [p for line in region.get("lines") or [] for p in line["polygon"]]
+    if not points:
+        return None
+    xs = [int(p[0]) for p in points]
+    ys = [int(p[1]) for p in points]
+    return [[min(xs), min(ys)], [max(xs), min(ys)], [max(xs), max(ys)], [min(xs), max(ys)]]
+
+
+def build_page_xml(page, comments=None):
     root = etree.Element(
         "PcGts",
         nsmap={None: PAGE_NS, "xsi": XSI_NS},
@@ -33,6 +46,9 @@ def build_page_xml(page):
     now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     etree.SubElement(metadata, "Created").text = now
     etree.SubElement(metadata, "LastChange").text = now
+    if comments:
+        # PAGE schema order in Metadata: Creator, Created, LastChange, Comments
+        etree.SubElement(metadata, "Comments").text = comments
 
     # Page
     page_el = etree.SubElement(root, "Page")
@@ -43,12 +59,17 @@ def build_page_xml(page):
     else:
         logging.warning(f"Image size unknown for {page['image_path']}: imageWidth/imageHeight left out")
 
-    for i, region in enumerate(page.get("regions") or []):
+    i = 0
+    for region in page.get("regions") or []:
+        polygon = _region_polygon(region)
+        if polygon is None:  # no polygon and no lines: nothing to write
+            continue
         region_id = f"r{i}"
         tr = etree.SubElement(page_el, "TextRegion")
         tr.set("id", region_id)
         tr.set("custom", f"readingOrder {{index:{i};}}")
-        etree.SubElement(tr, "Coords").set("points", format_polygon(region["polygon"]))
+        etree.SubElement(tr, "Coords").set("points", format_polygon(polygon))
+        i += 1
 
         for j, line in enumerate(region["lines"]):
             tl = etree.SubElement(tr, "TextLine")
@@ -61,6 +82,7 @@ def build_page_xml(page):
     return etree.ElementTree(root)
 
 
-def write_page_xml(page, path):
-    build_page_xml(page).write(path, xml_declaration=True, encoding="utf-8", method="xml", pretty_print=True)
+def write_page_xml(page, path, comments=None):
+    """comments: optional free text for Metadata/Comments, e.g. a description of the models used."""
+    build_page_xml(page, comments).write(path, xml_declaration=True, encoding="utf-8", method="xml", pretty_print=True)
     logging.info(f"PAGE XML saved to {path}")

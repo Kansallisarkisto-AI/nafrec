@@ -27,6 +27,7 @@ statistics and language added with page_stats.add_page_info):
             },
         ],
     }
+    Other keys in the dicts are allowed and ignored by the writers.
 
 Statistics: the writer has no knowledge of specific statistics.
     - stats["PC"] (standard ALTO attribute) is written on Page
@@ -71,7 +72,7 @@ class ProcessingStep:
     """
     id: str
     description: str
-    software_name: str
+    software_name: str | None = None
     software_version: str | None = None
     software_creator: str | None = None
 
@@ -127,6 +128,21 @@ def _shape(parent, polygon):
     _sub(_sub(parent, "Shape"), "Polygon", POINTS=" ".join(f"{int(x)},{int(y)}" for x, y in polygon))
 
 
+def region_polygon(region):
+    """
+    The region's polygon; if it has none, the bounding box of its lines as a rectangle;
+    None if it has neither (such a region is not written).
+    """
+    polygon = region.get("polygon")
+    if polygon is not None and len(polygon) > 0:
+        return polygon
+    points = [p for line in region.get("lines") or [] for p in line["polygon"]]
+    if not points:
+        return None
+    x0, y0, x1, y1 = _bbox(points)
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+
 def _script_tag_id(script):
     return make_id("SCRIPT", str(script).upper())
 
@@ -168,12 +184,13 @@ def build_alto(page, steps, include_script=False):
         _sub(proc, "processingStepDescription", step.description)
         if settings and step.id == STATS_STEP_ID:
             _sub(proc, "processingStepSettings", settings)
-        sw = _sub(proc, "processingSoftware")
-        if step.software_creator:
-            _sub(sw, "softwareCreator", step.software_creator)
-        _sub(sw, "softwareName", step.software_name)
-        if step.software_version is not None:
-            _sub(sw, "softwareVersion", step.software_version)
+        if step.software_name:
+            sw = _sub(proc, "processingSoftware")
+            if step.software_creator:
+                _sub(sw, "softwareCreator", step.software_creator)
+            _sub(sw, "softwareName", step.software_name)
+            if step.software_version is not None:
+                _sub(sw, "softwareVersion", step.software_version)
 
     _sub(root, "Styles")
 
@@ -209,16 +226,21 @@ def build_alto(page, steps, include_script=False):
         print_space = _sub(page_el, "PrintSpace", ID="PS_00001", **_box(x0, y0, x1, y1))
 
         counts = {}
-        for i, region in enumerate(regions, 1):
+        written = 0
+        for region in regions:
+            polygon = region_polygon(region)
+            if polygon is None:  # no polygon and no lines: nothing to write
+                continue
+            written += 1
             name = region.get("name") or "region"
             n = counts.get(name, 0)
             counts[name] = n + 1
             region_id = make_id(name, n)
-            region_box = _box(*_bbox(region["polygon"]))
+            region_box = _box(*_bbox(polygon))
 
             composed = _sub(print_space, "ComposedBlock", ID=f"block_1_{i}", **region_box)
             block = _sub(composed, "TextBlock", ID=region_id, **region_box)
-            _shape(block, region["polygon"])
+            _shape(block, polygon)
 
             for j, line in enumerate(region["lines"]):
                 line_id = f"{region_id}_line_{j}"
