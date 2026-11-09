@@ -262,17 +262,14 @@ def get_line_dicts(polygons, generated_text, line_confs, scores):
             - text (str): Predicted text content.
             - conf (float): Confidence score for line detection.
             - text_conf (float): Confidence score for text recognition.
-            - row_length (int): Character count of the text.
     """
     line_dicts = []
     for i in range(len(generated_text)):
-        row_length = len(generated_text[i])
         line_dict = {
             'polygon': polygons[i],
             'text': generated_text[i],
             'conf': line_confs[i],
-            'text_conf': scores[i],
-            'row_length': row_length
+            'text_conf': scores[i]
         }
         line_dicts.append(line_dict)
     return line_dicts
@@ -297,7 +294,6 @@ def get_text_preds(data, recognition_model, processor):
             - text (str): Predicted text content.
             - conf (float): Confidence score for line detection.
             - text_conf (float): Confidence score for text recognition.
-            - row_length (int): Character count of the text.
     """
     # Get text predictions
     scores, generated_text = get_text_lines(
