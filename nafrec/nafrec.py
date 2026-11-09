@@ -5,8 +5,9 @@ Starts the model (inference) workers and the CPU pre/postprocessing pool once,
 then accepts image processing requests until closed. All the actual work is done
 by the existing functions in main.py (start_inference_workers, init_cpu_worker,
 predict_single_image), so predictions are identical to the CLI. Nothing is
-written to disk: each request returns the internal (preds, xml_input) pair that
-xml_output.get_xml (and utils.save_json_output) take.
+written to disk: each request returns the internal (page, xml_input) pair that
+xml_output.get_xml (and utils.save_json_output) take. page is a page dict
+(format: see alto_writer.py).
 
 Example:
     from nafrec import NAFRec
@@ -17,8 +18,8 @@ Example:
                     device="cuda", gpu_ids=[0]) as rec:
             result = rec.process("page.jpg")                     # blocking
             if result:                                           # None = nothing detected
-                preds, xml_input = result
-                get_xml(preds, xml_input)                        # from nafrec.xml_output
+                page, xml_input = result
+                get_xml(page, xml_input)                         # from nafrec.xml_output
             fut = rec.submit("page2.jpg")                        # non-blocking
             results = rec.process_many(["a.jpg", "b.jpg"])       # parallel, input order
 
@@ -26,7 +27,7 @@ For callers with their own CPU processes (e.g. SfRD), NAFRec(cpu_pool=False, ...
 model workers. Pass the NAFRec object itself to those processes (it pickles as a lightweight handle
 to the model workers) and call the building blocks of process() there:
     lines = handle.detect("page.jpg")                  # 7-tuple of raw line / region polygons
-    preds, model_name = handle.recognize("page.jpg", ordered_lines)   # or None
+    page, model_name = handle.recognize("page.jpg", ordered_lines)   # or None
     # handle.recognize(..., with_model_type=True) also returns the nafrec.model_types.ModelType
 """
 import os
@@ -41,8 +42,8 @@ from .main import (make_args, validate_args, resolve_devices,
 
 
 def _predict(image_path):
-    preds, xml_input, _msg = predict_single_image(image_path)
-    return None if preds is None else (preds, xml_input)
+    page, xml_input, _msg = predict_single_image(image_path)
+    return None if page is None else (page, xml_input)
 
 
 class NAFRec:
@@ -105,7 +106,7 @@ class NAFRec:
 
     def submit(self, image_path):
         """Queue an image; returns a multiprocessing AsyncResult whose value is
-        (preds, xml_input), or None if nothing was detected/transcribed.
+        (page, xml_input), or None if nothing was detected/transcribed.
         Errors are raised on .get()."""
         if self._closed:
             raise RuntimeError("NAFRec is closed")
@@ -126,7 +127,7 @@ class NAFRec:
                         "A model worker process died (see its traceback above)")
 
     def process(self, image_path):
-        """Process one image and block until done. Returns (preds, xml_input) or None."""
+        """Process one image and block until done. Returns (page, xml_input) or None."""
         return self._wait(self.submit(image_path))
 
     def _run(self, fn, *fn_args):
@@ -149,20 +150,20 @@ class NAFRec:
     def recognize(self, image_path, ordered_lines, with_model_type=False):
         """Classify (when both recognizers are configured) and recognize caller-supplied lines;
         blocks. ordered_lines is a list of regions as made by nafrec.utils.order_regions_lines
-        (each with 'lines', 'line_confs' and 'img_shape'). Returns (preds, model_name), with preds
-        a list with one dict per region (its 'text_lines' holding polygon, text, text_conf, ...),
-        or None if there were no lines. With with_model_type=True returns
-        (preds, model_name, model_type) instead, model_type being the nafrec.model_types.ModelType
+        (each with 'lines', 'line_confs' and 'img_shape'). Returns (page, model_name), with page
+        a page dict (format: see alto_writer.py; one region per input region, in the same
+        order), or None if there were no lines. With with_model_type=True returns
+        (page, model_name, model_type) instead, model_type being the nafrec.model_types.ModelType
         of the recognizer(s) used (e.g. LATIN_PPOCRV6_AND_CYRILLIC_TROCR), for building an
         XmlInput / the XML outputs."""
-        preds, model_name, model_type = self._run(
+        page, model_name, model_type = self._run(
             recognize_lines, str(image_path), ordered_lines, True)
-        if preds is None:
+        if page is None:
             return None
-        return (preds, model_name, model_type) if with_model_type else (preds, model_name)
+        return (page, model_name, model_type) if with_model_type else (page, model_name)
 
     def process_many(self, image_paths):
-        """Process several images in parallel; returns results in input order (each (preds, xml_input) or None)."""
+        """Process several images in parallel; returns results in input order (each (page, xml_input) or None)."""
         futures = [self.submit(p) for p in image_paths]
         return [self._wait(f) for f in futures]
 
