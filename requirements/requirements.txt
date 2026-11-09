@@ -8,8 +8,6 @@ anyio==4.15.1
     # via httpx2
 av==19.0.2
     # via supervision
-beautifulsoup4==4.15.0
-    # via nafrec (pyproject.toml)
 certifi==2026.10.19
     # via requests
 charset-normalizer==3.5.2
@@ -60,8 +58,6 @@ jinja2==3.1.6
     # via torch
 kiwisolver==1.5.1
     # via matplotlib
-langdetect==1.0.9
-    # via nafrec (pyproject.toml)
 lxml==6.1.3
     # via nafrec (pyproject.toml)
 markdown-it-py==4.2.0
@@ -88,6 +84,7 @@ numpy==2.5.4
     #   onnxconverter-common
     #   opencv-python-headless
     #   ppocrv6-onnx-naf
+    #   py3langid
     #   rfdetr
     #   scipy
     #   shapely
@@ -165,6 +162,8 @@ protobuf==7.36.2
     #   onnxconverter-common
 psutil==7.2.2
     # via nafrec (pyproject.toml)
+py3langid==0.4.0
+    # via nafrec (pyproject.toml)
 pyclipper==1.4.0
     # via ppocrv6-onnx-naf
 pydantic==2.14.1
@@ -209,11 +208,7 @@ shapely==2.2.0
 shellingham==1.5.4
     # via typer
 six==1.17.0
-    # via
-    #   langdetect
-    #   python-dateutil
-soupsieve==3.0.4
-    # via beautifulsoup4
+    # via python-dateutil
 supervision==0.31.1
     # via
     #   nafrec (pyproject.toml)
@@ -251,7 +246,6 @@ typer==0.27.3
 typing-extensions==4.16.0
     # via
     #   anyio
-    #   beautifulsoup4
     #   httpx2
     #   huggingface-hub
     #   onnx
@@ -265,5 +259,3 @@ tzdata==2026.5
     # via python-dateutil
 urllib3==2.8.0
     # via requests
-yattag==1.16.1
-    # via nafrec (pyproject.toml)
