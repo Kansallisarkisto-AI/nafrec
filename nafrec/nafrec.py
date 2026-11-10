@@ -77,25 +77,27 @@ class NAFRec:
         self._queues = {role: self._manager.JoinableQueue(maxsize=self.args.inference_in_flight_limit)
                         for role in ("det", "rec")}
         self._results = self._manager.dict()
+        self._results_cond = self._manager.Condition()
         self._slots = self._manager.BoundedSemaphore(
             self.args.inference_in_flight_limit)
 
         self._workers = start_inference_workers(
-            ctx, self.args, self.devices, self._queues, self._results)
+            ctx, self.args, self.devices, self._queues, self._results, self._results_cond)
         self._pool = ctx.Pool(
             processes=cpu_processes,
             # init_cpu_worker will set the correct queues in _CPU_STATE
             initializer=init_cpu_worker,
-            initargs=(self.args, self._queues, self._results, self._slots),
+            initargs=(self.args, self._queues, self._results, self._results_cond, self._slots),
         ) if cpu_pool else None
         self._closed = False
         self._owner = True
 
     def __getstate__(self):
-        # Pickles as a handle to the running model workers (queues, results, slots), e.g. to
+        # Pickles as a handle to the running model workers (queues, results, results condition,
+        # slots), e.g. to
         # hand to the initializer of a caller's own pool. A handle can't submit() or close().
         return {k: getattr(self, k) for k in (
-            "args", "devices", "cpu_processes", "_queues", "_results", "_slots")}
+            "args", "devices", "cpu_processes", "_queues", "_results", "_results_cond", "_slots")}
 
     def __setstate__(self, state):
         self.__dict__.update(state)
@@ -138,7 +140,8 @@ class NAFRec:
         if self._pool is not None:
             return self._wait(self._pool.apply_async(fn, fn_args))
         if not _CPU_STATE:
-            init_cpu_worker(self.args, self._queues, self._results, self._slots)
+            init_cpu_worker(self.args, self._queues, self._results,
+                            self._results_cond, self._slots)
         return fn(*fn_args)
 
     def detect(self, image_path):
