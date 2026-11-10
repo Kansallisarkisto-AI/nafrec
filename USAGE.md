@@ -13,7 +13,7 @@ This library documentation (USAGE.md) is generated with Claude and not thoroughl
     - [`cpu_pool=False`](#cpu_poolfalse)
   - [Processing images](#processing-images)
   - [Return values](#return-values)
-    - [`preds`](#preds)
+    - [`page`](#page)
     - [`xml_input`](#xml_input)
   - [Writing XML and JSON](#writing-xml-and-json)
   - [Using your own CPU processes](#using-your-own-cpu-processes)
@@ -44,9 +44,9 @@ if __name__ == "__main__":  # required: workers use the "spawn" start method
     ) as rec:
         result = rec.process("page.jpg")      # blocks until the page is done
         if result is not None:                # None = nothing detected / transcribed
-            preds, xml_input = result
-            save_xml(preds, xml_input)        # writes /output/path/alto/page.xml
-            save_json_output(preds, "page.jpg", rec.args)
+            page, xml_input = result
+            save_xml(page, xml_input)         # writes /output/path/alto/page.xml
+            save_json_output(page, "page.jpg", rec.args)
 ```
 
 The `if __name__ == "__main__":` guard is required in scripts. Model and CPU workers are started with the `spawn` method (needed for CUDA), which re-imports your main module in every worker.
@@ -104,9 +104,9 @@ All methods take an image path (`str` or `Path`).
 
 | Method | Blocks | Description |
 |--------|--------|-------------|
-| `process(image_path)` | yes | Process one image and return `(preds, xml_input)`, or `None`. |
-| `submit(image_path)` | no | Queue an image and return a `multiprocessing` `AsyncResult`. `.get()` gives `(preds, xml_input)` or `None`; errors are raised on `.get()`. |
-| `process_many(image_paths)` | yes | Process several images in parallel. Returns the results in input order, each `(preds, xml_input)` or `None`. |
+| `process(image_path)` | yes | Process one image and return `(page, xml_input)`, or `None`. |
+| `submit(image_path)` | no | Queue an image and return a `multiprocessing` `AsyncResult`. `.get()` gives `(page, xml_input)` or `None`; errors are raised on `.get()`. |
+| `process_many(image_paths)` | yes | Process several images in parallel. Returns the results in input order, each `(page, xml_input)` or `None`. |
 
 ```python
 with NAFRec(**options) as rec:
@@ -127,41 +127,47 @@ The pool processes images in parallel, so to use the hardware well, submit many 
 
 ## Return values
 
-Each result is `(preds, xml_input)`, or `None` if no text lines were detected or none could be transcribed (the CLI reports these cases as `[info]` lines).
+Each result is `(page, xml_input)`, or `None` if no text lines were detected or none could be transcribed (the CLI reports these cases as `[info]` lines).
 
-### `preds`
+### `page`
 
-A list with one dictionary per text region, in reading order. Page-level values are repeated in every region:
+A dictionary describing the page, the same format the XML writers take (documented in `nafrec/alto_writer.py`):
 
 | Key | Description |
 |-----|-------------|
-| `img_name` | Image file name |
-| `height`, `width` | Image size in pixels |
-| `page_conf_mean`, `page_conf_median`, `page_conf_25`, `page_conf_75` | Page-level statistics of the text recognition confidences |
-| `n_long_rowtext` | Number of lines where the model generated over 100 characters |
-| `language` | Predicted (majority) language of the recognized text (`"unknown"` if detection fails) |
-| `region_conf` | Region detection confidence |
-| `region_coords` | Region polygon, `[[x, y], ...]` |
-| `region_name` | Region name |
-| `text_lines` | List of line dictionaries, in reading order (below) |
+| `image_path` | Path of the processed image |
+| `width`, `height` | Image size in pixels |
+| `language` | Detected language of the recognized text (ISO 639-1 code), or `None` if there is no text to detect from |
+| `stats` | Page-level statistics, see below |
+| `regions` | List of region dictionaries, in reading order (below) |
 
-Each entry of `text_lines`:
+`stats` holds `PC` (mean of the text recognition confidences), `PC25`, `PC50` and `PC75` (25th percentile, median and 75th percentile), each `None` if no line has a confidence value, and `N_LONG_ROWTEXT` (number of lines with over 100 recognized characters). They are computed by `nafrec.page_stats.compute_stats`, which is the only place where the statistics are defined. In ALTO, `PC` is written on the `Page` element and the others to `processingStepSettings` of the text recognition step.
+
+Each entry of `regions`:
+
+| Key | Description |
+|-----|-------------|
+| `name` | Region name |
+| `polygon` | Region polygon, `[[x, y], ...]`, or `None` (caller-supplied regions without coordinates; the XML then uses the bounding box of the region's lines) |
+| `conf` | Region detection confidence |
+| `lines` | List of line dictionaries, in reading order (below) |
+
+Each entry of `lines`:
 
 | Key | Description |
 |-----|-------------|
 | `polygon` | Line polygon, `[[x, y], ...]` |
 | `text` | Recognized text |
-| `conf` | Line detection confidence |
-| `text_conf` | Text recognition confidence |
-| `row_length` | Number of generated characters |
-| `predicted_script` | `"latin"` or `"cyrillic"`. Only present when script classification was used (both a main and a cyrillic recognition model configured) |
-| `script_pred_conf` | Confidence of the script prediction (same condition) |
+| `conf` | Text recognition confidence |
+| `line_conf` | Line detection confidence |
+| `script` | `"latin"` or `"cyrillic"` when script classification was used (both a main and a cyrillic recognition model configured), otherwise `None`. Written to ALTO as script tags |
+| `script_conf` | Confidence of the script prediction (same condition) |
 
 These are the same values as in the `.json` files written by the CLI.
 
 ### `xml_input`
 
-A `nafrec.main.XmlInput` (a pydantic model) that describes the page and the models used. It is what [`save_xml`](#writing-xml-and-json) takes:
+A `nafrec.main.XmlInput` (a pydantic model) that describes the page and the models used. It is what [`save_xml`](#writing-xml-and-json) takes, together with `page`:
 
 | Field | Description |
 |-------|-------------|
@@ -182,15 +188,15 @@ A `nafrec.main.XmlInput` (a pydantic model) that describes the page and the mode
 from nafrec.xml_output import save_xml
 from nafrec.utils import save_json_output
 
-preds, xml_input = result
-save_xml(preds, xml_input)                      # ALTO and/or PAGE XML, as set in xml_input
-save_json_output(preds, image_path, rec.args)   # <json_folder>/<image stem>.json
+page, xml_input = result
+save_xml(page, xml_input)                       # ALTO and/or PAGE XML, as set in xml_input
+save_json_output(page, image_path, rec.args)    # <json_folder>/<image stem>.json
 ```
 
-- `save_xml` writes `<xml_path>/alto/<image stem>.xml` and/or `<xml_path>/page/<image stem>.xml`, depending on `page_xml` and `alto_xml`.
+- `save_xml` writes `<xml_path>/alto/<image stem>.xml` (ALTO 4.4) and/or `<xml_path>/page/<image stem>.xml` (PAGE 2013-07-15), depending on `page_xml` and `alto_xml`. When a script classification model was used, ALTO gets the line-level script as `Tags`/`TAGREFS`.
 - `save_json_output` writes to `json_folder` if set, otherwise to `<xml_folder>/json`, otherwise to `json/` next to the image. It uses the options object only for these two folder settings, and does not check `output_json`: whether to call it is up to you.
 
-You can of course skip both and use `preds` directly (for example to store the text in a database).
+You can of course skip both and use `page` directly (for example to store the text in a database).
 
 ## Using your own CPU processes
 
@@ -238,8 +244,8 @@ def work(image_path):
     recognized = HANDLE.recognize(image_path, ordered_lines)
     if recognized is None:             # no lines
         return image_path, []
-    preds, model_name = recognized
-    return image_path, preds
+    page, model_name = recognized
+    return image_path, page
 
 if __name__ == "__main__":
     rec = NAFRec(cpu_pool=False, detection_model_path="det.pth",
@@ -247,7 +253,7 @@ if __name__ == "__main__":
     ctx = get_context("spawn")
     try:
         with ctx.Pool(rec.cpu_processes, initializer=init_worker, initargs=(rec,)) as pool:
-            for image_path, preds in pool.imap_unordered(work, image_paths):
+            for image_path, page in pool.imap_unordered(work, image_paths):
                 ...
     finally:
         rec.close()
@@ -276,15 +282,15 @@ Classifies (when both a main and a cyrillic recognizer are configured) and recog
 | Key | Description |
 |-----|-------------|
 | `lines` | List of line polygons (`[[x, y], ...]`) in the order you want them in the output. They are cropped from the image at these coordinates, so they may come from any source: nafrec's detector, your own annotations, etc. |
-| `line_confs` | One confidence value per line (copied to `conf` in the output) |
+| `line_confs` | One confidence value per line (copied to `line_conf` in the output) |
 | `img_shape` | `(height, width)` of the image |
-| `region_coords`, `region_name`, `region_conf` | Copied to the output. Without them the output has `None` for these |
+| `region_coords`, `region_name`, `region_conf` | Copied to the output region's `polygon`, `name` and `conf` (`coords`, `name` and `conf` are accepted too). Without them the output has `None` for these |
 
 Other keys in the region dictionaries (such as the `line_labels` that SfRD adds) are ignored by `recognize()` and are not copied to the result. The result is in the same order as `ordered_lines`, so you can zip the two to get your own data back, as SfRD does.
 
-Returns `(preds, model_name)`, or `None` if there were no lines at all. `preds` is in the format [described above](#preds): one entry per input region, **including regions without lines** (empty `text_lines`). `model_name` is the name of the recognition model(s) used.
+Returns `(page, model_name)`, or `None` if there were no lines at all. `page` is in the format [described above](#page): one entry in `regions` per input region, in the same order, **including regions without lines** (empty `lines`; the XML writers skip regions that have neither lines nor a polygon). `model_name` is the name of the recognition model(s) used.
 
-With `with_model_type=True` the return value is `(preds, model_name, model_type)`, where `model_type` is the `nafrec.model_types.ModelType` of the recognizer(s) actually used on the page. This is what you need, together with the other information you know, to build an `XmlInput` and write XML for lines that you supplied yourself:
+With `with_model_type=True` the return value is `(page, model_name, model_type)`, where `model_type` is the `nafrec.model_types.ModelType` of the recognizer(s) actually used on the page. This is what you need, together with the other information you know, to build an `XmlInput` and write XML for lines that you supplied yourself:
 
 ```python
 from nafrec.main import XmlInput
@@ -293,7 +299,7 @@ from nafrec.xml_output import save_xml
 
 recognized = HANDLE.recognize(image_path, ordered_lines, with_model_type=True)
 if recognized:
-    preds, model_name, model_type = recognized
+    page, model_name, model_type = recognized
     xml_input = XmlInput(
         image_path=image_path,
         page_xml=0, alto_xml=1,
@@ -306,7 +312,7 @@ if recognized:
         text_recognition_model_name=model_name,
         text_recognition_model_type=model_type,
     )
-    save_xml(preds, xml_input)
+    save_xml(page, xml_input)
 ```
 
 `ModelType.CALLER_SUPPLIED_LINES` makes the XML metadata state that the regions or lines were supplied by the calling application, not detected by nafrec.

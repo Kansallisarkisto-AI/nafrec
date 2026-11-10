@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nafrec"
+version = "0.3.0"
+description = "An HTR and OCR pipeline for historical text recognition, which optionally classifies text lines into cyrillic or latin based on their script types and then passes them to a proper text recognition model."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "lxml>=6.0.2",
+  "numpy>=1.24.3",
+  "opencv-python-headless>=4.8.1.78",
+  "pillow>=9.5.0",
+  "pydantic>=2.6.1",
+  "rfdetr>=1.11.2",
+  "shapely>=2.0.6",
+  "psutil>=5.9",
+  "py3langid>=0.3.0",
+  "tqdm",
+  "torch>=2.4.0",
+  "transformers>=5.10.4,<6",
+  "supervision>=0.30.9",
+  "huggingface-hub>=1.19.0",
+  "onnx",
+  "onnxconverter-common>=1.14", # runtime fp16 conversion (--fp16_rec/--fp16_det)
+  "ppocrv6-onnx-naf>=0.1.0",
+]
+
+authors = [
+  { name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi" },
+  { name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi" },
+  { name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi" },
+]
+maintainers = [
+  { name = "Mikko Lipsanen", email = "mikko.lipsanen@kansallisarkisto.fi" },
+  { name = "Atte Föhr", email = "atte.fohr@kansallisarkisto.fi" },
+  { name = "John Mäkelä", email = "john.makela@kansallisarkisto.fi" },
+]
+license = "Apache-2.0"
+license-files = ["LICEN[CS]E.*"]
+keywords = ["document understanding", "handwriting recognition", "ocr", "htr"]
+classifiers = ["Programming Language :: Python"]
+
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.18"]
+cpu-openvino = ["onnxruntime-openvino>=1.18"]
+gpu = ["onnxruntime-gpu>=1.18", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
+gpu-cu12 = ["onnxruntime-gpu>=1.18", "tensorrt-cu12<11", "tensorrt-cu12-bindings<11", "tensorrt-cu12-libs<11"]  # TensorRT < 11 to avoid obscure bug
+gpu-optimum = [
+  "onnxruntime-gpu>=1.18",
+  "optimum-onnx-naf",
+  "optimum",
+  "tensorrt-cu13<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu13-bindings<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu13-libs<11",  # TensorRT < 11 to avoid obscure bug
+]
+gpu-cu12-optimum = [
+  "onnxruntime-gpu>=1.18",
+  "optimum-onnx-naf",
+  "optimum",
+  "tensorrt-cu12<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu12-bindings<11",  # TensorRT < 11 to avoid obscure bug
+  "tensorrt-cu12-libs<11",  # TensorRT < 11 to avoid obscure bug
+]
+gpu-amd-rocm = [
+  "onnxruntime-rocm",
+  "optimum-onnx-naf",
+  "optimum",
+]
+gpu-amd-migraphx = [
+  "onnxruntime-migraphx",
+  "optimum-onnx-naf",
+  "optimum",
+  "migraphx",
+  "migraphx-libs",
+]
+
+[project.urls]
+Homepage = "https://github.com/Kansallisarkisto-AI/nafrec"
+Documentation = "https://github.com/Kansallisarkisto-AI/nafrec"
+Repository = "https://github.com/Kansallisarkisto-AI/nafrec"
+"Bug Tracker" = "https://github.com/Kansallisarkisto-AI/nafrec/issues"
+
+[project.scripts]
+nafrec = "nafrec:main.entrypoint"
+
+# Don't try to satisfy both extras at once (they provide the same module).
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "cpu-openvino" }, { extra = "gpu-optimum" }, { extra = "gpu-amd-migraphx" }, { extra = "gpu-amd-rocm" }, { extra = "gpu-cu12-optimum" }, { extra = "gpu-cu12" }]]
+
+[tool.uv.sources]
+onnxruntime-rocm = { index = "amd" }
+onnxruntime-migraphx = { index = "amdnew" }
+migraphx = { index = "migraphx" }
+migraphx-libs = { index = "migraphx" }
+
+[[tool.uv.index]]
+name = "amd"
+url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0.2/"
+format = "flat"
+explicit = true
+
+[[tool.uv.index]]
+name = "amdnew"
+url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/"
+format = "flat"
+explicit = true
+
+[[tool.uv.index]]
+name = "migraphx"
+url = "https://rocm.frameworks.amd.com/whl-multi-arch/migraphx/"
+format = "flat"
+explicit = true
+
+[tool.hatch.metadata]
+allow-direct-references = true

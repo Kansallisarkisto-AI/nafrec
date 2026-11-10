@@ -3,7 +3,6 @@ import json
 import glob
 import numpy as np
 from pathlib import Path
-from langdetect import detect
 from shapely.geometry import Polygon
 from shapely.validation import make_valid
 
@@ -239,78 +238,54 @@ def flatten_lines(segment_predictions):
     return img_lines, img_line_confs, n_lines
 
 
-def detect_language(text_lines):
+def process_text_predictions(text_lines, segment_predictions, n_lines, image_path, width, height):
     """
-    Detect the language of text from multiple text lines.
+    Combines the text recognition results with the ordered regions into a page dict
+    (format: see alto_writer.py). Page statistics and language are added separately
+    with page_stats.add_page_info.
 
     Args:
-        text_lines: List of text strings to analyze.
+        text_lines: line dicts from the recognizer (get_text_preds / get_ppocr_preds),
+            in the order of the flattened polygons (see flatten_lines).
+        segment_predictions: the ordered regions the lines came from. Caller-supplied
+            regions may use 'coords' / 'name' / 'conf' instead of 'region_coords' /
+            'region_name' / 'region_conf'; without either, the values are None (the XML
+            writers then use the bounding box of the region's lines).
+        n_lines: number of lines per region (see flatten_lines).
+        image_path, width, height: the source image and its size.
 
-    Returns:
-        str: Detected language code, or "unknown" if detection fails.
+    Every region of segment_predictions is kept, in the same order, also regions without
+    lines, so the result can be zipped with segment_predictions. Besides the keys the
+    writers use, each line keeps 'line_conf' (line detection confidence) and
+    'script_conf' (script classification confidence, None without classification).
     """
-    combined_text = " ".join(text_lines)
-    try:
-        return detect(combined_text)
-    except:
-        return "unknown"
-
-
-def get_page_stats(line_dicts, image_name, height, width):
-    """
-    Compile page / image level confidence aggregates and detect language for entire text.
-    """
-    # Extract scores and line texts from line dicts
-    scores = [d['text_conf'] for d in line_dicts]
-    generated_text = [d['text'] for d in line_dicts]
-    # Calculate aggregate stats from line confidences
-    page_conf_mean = np.mean(scores) if scores else 0
-    page_conf_median = np.median(scores) if scores else 0
-    page_conf_25 = np.percentile(scores, 25) if scores else 0
-    page_conf_75 = np.percentile(scores, 75) if scores else 0
-    # Calculate number of rows exceeding specified length
-    n_long_rowtext = sum(1 for d in line_dicts if d['row_length'] > 100)
-    # Detect the language of the text
-    language = detect_language(generated_text)
-    lines_dict = {
-        'img_name': image_name,
-        'height': height,
-        'width': width,
-        'page_conf_mean': page_conf_mean,
-        'page_conf_median': page_conf_median,
-        'page_conf_25': page_conf_25,
-        'page_conf_75': page_conf_75,
-        'n_long_rowtext': n_long_rowtext,
-        'language': language,
-        'text_lines': line_dicts
-    }
-    return lines_dict
-
-
-def process_text_predictions(text_predictions, segment_predictions, n_lines):
-    lines_dicts = text_predictions['text_lines']
     regions = []
-    for ind, region in enumerate(segment_predictions):
-        n_region_lines = n_lines[ind]
-        region_lines_dicts = lines_dicts[:n_region_lines]
-        lines_dicts = lines_dicts[n_region_lines:]
-        # Combine page data and region specific data
-        region_lines = {'img_name': text_predictions['img_name'],
-                        'height': text_predictions['height'],
-                        'width': text_predictions['width'],
-                        'page_conf_mean':  text_predictions['page_conf_mean'],
-                        'page_conf_median': text_predictions['page_conf_median'],
-                        'page_conf_25': text_predictions['page_conf_25'],
-                        'page_conf_75': text_predictions['page_conf_75'],
-                        'n_long_rowtext': text_predictions['n_long_rowtext'],
-                        'language': text_predictions['language'],
-                        'region_conf': region.get('region_conf', region.get('conf', None)),
-                        'region_coords': region.get('region_coords', region.get('coords', None)),
-                        'region_name': region.get('region_name', region.get('name', None)),
-                        'text_lines': region_lines_dicts
-                        }
-        regions.append(region_lines)
-    return regions
+    for region, n_region_lines in zip(segment_predictions, n_lines):
+        region_lines, text_lines = text_lines[:n_region_lines], text_lines[n_region_lines:]
+        regions.append({
+            'name': region.get('region_name', region.get('name')),
+            'polygon': region.get('region_coords', region.get('coords')),
+            'conf': region.get('region_conf', region.get('conf')),
+            'lines': [
+                {
+                    'polygon': line['polygon'],
+                    'text': line.get('text') or '',
+                    'conf': line.get('text_conf'),
+                    'script': line.get('predicted_script'),
+                    'line_conf': line.get('conf'),
+                    'script_conf': line.get('script_pred_conf'),
+                }
+                for line in region_lines
+            ],
+        })
+    return {
+        'image_path': str(image_path),
+        'width': width,
+        'height': height,
+        'language': None,
+        'stats': {},
+        'regions': regions,
+    }
 
 
 def save_json_output(data, image_path, args):

@@ -16,10 +16,6 @@ av==19.0.2
     # via
     #   -c requirements.txt
     #   supervision
-beautifulsoup4==4.15.0
-    # via
-    #   -c requirements.txt
-    #   nafrec (pyproject.toml)
 certifi==2026.10.19
     # via
     #   -c requirements.txt
@@ -108,10 +104,6 @@ kiwisolver==1.5.1
     # via
     #   -c requirements.txt
     #   matplotlib
-langdetect==1.0.9
-    # via
-    #   -c requirements.txt
-    #   nafrec (pyproject.toml)
 lxml==6.1.3
     # via
     #   -c requirements.txt
@@ -156,6 +148,7 @@ numpy==2.5.4
     #   onnxruntime-openvino
     #   opencv-python-headless
     #   ppocrv6-onnx-naf
+    #   py3langid
     #   rfdetr
     #   scipy
     #   shapely
@@ -274,6 +267,10 @@ psutil==7.2.2
     # via
     #   -c requirements.txt
     #   nafrec (pyproject.toml)
+py3langid==0.4.0
+    # via
+    #   -c requirements.txt
+    #   nafrec (pyproject.toml)
 pyclipper==1.4.0
     # via
     #   -c requirements.txt
@@ -350,12 +347,7 @@ shellingham==1.5.4
 six==1.17.0
     # via
     #   -c requirements.txt
-    #   langdetect
     #   python-dateutil
-soupsieve==3.0.4
-    # via
-    #   -c requirements.txt
-    #   beautifulsoup4
 supervision==0.31.1
     # via
     #   -c requirements.txt
@@ -410,7 +402,6 @@ typing-extensions==4.16.0
     # via
     #   -c requirements.txt
     #   anyio
-    #   beautifulsoup4
     #   httpx2
     #   huggingface-hub
     #   onnx
@@ -430,7 +421,3 @@ urllib3==2.8.0
     # via
     #   -c requirements.txt
     #   requests
-yattag==1.16.1
-    # via
-    #   -c requirements.txt
-    #   nafrec (pyproject.toml)

@@ -192,7 +192,6 @@ By default a .json file is also written for each image (disable with `--output_j
 - Image height
 - Image width
 - Page level mean of recognition line confidence values
-- Page level median of recognition line confidence values
 - Page level 25. percentile of recognition line confidence values
 - Page level 75. percentile of recognition line confidence values
 - Number of lines where recognition model generated over 100 characters 
@@ -205,6 +204,5 @@ By default a .json file is also written for each image (disable with `--output_j
     - Text line polygon coordinates
     - Text line polygon detection confidence value
     - Text line recognition confidence value
-    - Length of generated text
     - Predicted script type of the row ("latin" or "cyrillic")
     - Script type prediction confidence value
