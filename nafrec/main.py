@@ -1183,7 +1183,7 @@ def process_single_image(image_path):
         if args.output_json:
             save_json_output(page, image_path, args)
         # n lines sent to recognition
-        return image_path, "ok", sum(len(r["text_lines"]) for r in page)
+        return image_path, "ok", page_line_count(page)
     except Exception:
         return image_path, "error", traceback.format_exc()
 

@@ -238,7 +238,7 @@ def build_alto(page, steps, include_script=False):
             region_id = make_id(name, n)
             region_box = _box(*_bbox(polygon))
 
-            composed = _sub(print_space, "ComposedBlock", ID=f"block_1_{i}", **region_box)
+            composed = _sub(print_space, "ComposedBlock", ID=f"block_1_{written}", **region_box)
             block = _sub(composed, "TextBlock", ID=region_id, **region_box)
             _shape(block, polygon)
 

@@ -29,7 +29,7 @@ def _processing_step(step_id, step, model_name):
 def get_processing_steps(xml_input):
     """
     Processing metadata for the ALTO Description, from the model names and types in
-    xml_input (a main.XmlInput). The step with id TEXT_RECOGNITION also carries the
+    xml_input (main.XmlInput). The step with id TEXT_RECOGNITION also carries the
     page statistics.
     """
     steps = [
