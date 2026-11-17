@@ -74,7 +74,7 @@ After downloading, update the model paths in your command line arguments or conf
 The pipeline processes images through the following steps:
 
 1. **Input**: Historical document image
-2. **Detection**: RF-DETR model detects text regions and text lines 
+2. **Detection**: RF-DETR or Paddle models detect text regions and text lines 
 3. **Cropping**: Text lines are cropped from the original image based on detected coordinates
 4. **Text type classification**: Classification model labels every text line as "cyrillic" or "latin" based on the predicted script type
 5. **Recognition**: Based on the classification results, text line images ase passed to the proper TrOCR or PP-OCRv6 model which recognizes text from each cropped line
