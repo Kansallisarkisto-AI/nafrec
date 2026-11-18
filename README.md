@@ -20,7 +20,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 # Install correct version of PyTorch for cpu, AMD ROCm or CUDA 13.x
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
 
-# Install package (choose cpu or gpu)
+# Install package (choose cpu, cpu-openvino, gpu or other extras)
 uv pip install nafrec[gpu]
 ```
 
@@ -56,11 +56,13 @@ The following pre-trained models can be downloaded from Hugging Face:
     [https://huggingface.co/Kansallisarkisto/cyrillic-large-handwritten](https://huggingface.co/Kansallisarkisto/cyrillic-large-handwritten)
 
 - For texts using latin script the model can be chosen based on the language(s) used in the processed documents:
-    - **PP-OCRv6 Finnish-Swedish Recognition Model**: 
+    - **PP-OCRv6 Finnish and Swedish Recognition Model**: 
     [https://huggingface.co/Kansallisarkisto/multicentury-ppocrv6-medium](https://huggingface.co/Kansallisarkisto/multicentury-ppocrv6-medium)
     - **PP-OCRv6 Estonian Recognition Model**: 
     [https://huggingface.co/Kansallisarkisto/estonian-ppocrv6-medium](https://huggingface.co/Kansallisarkisto/estonian-ppocrv6-medium)
-    - **TrOCR Finnish-Swedish Recognition Model**: 
+    - **PP-OCRv6 Latvian Recognition Model**: 
+    [https://huggingface.co/Kansallisarkisto/latvian-ppocrv6-medium](https://huggingface.co/Kansallisarkisto/latvian-ppocrv6-medium)
+    - **TrOCR Finnish and Swedish Recognition Model**: 
     [https://huggingface.co/Kansallisarkisto/multicentury-htr-model](https://huggingface.co/Kansallisarkisto/multicentury-htr-model)
     - **TrOCR Estonian Recognition Model**: 
     [https://huggingface.co/Kansallisarkisto/estonian-large-handwritten](https://huggingface.co/Kansallisarkisto/estonian-large-handwritten)
