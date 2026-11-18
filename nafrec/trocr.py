@@ -186,8 +186,11 @@ def predict_text(cropped_lines, recognition_model, processor):
     token_counts = token_mask.sum(dim=1).clamp(min=1)
 
     # Geometric mean of generated-token probabilities.
-    mean_log_probs = (
-        token_log_probs * token_mask
+    # torch.where, not multiplication by the mask: the positions after EOS
+    # (padding of the shorter lines in a batch) can have a log-probability of
+    # -inf, and -inf * 0 is NaN, which made the score of those lines NaN.
+    mean_log_probs = torch.where(
+        token_mask, token_log_probs, torch.zeros_like(token_log_probs)
     ).sum(dim=1) / token_counts
 
     scores = mean_log_probs.exp().float().cpu().tolist()
