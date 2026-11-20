@@ -46,10 +46,10 @@ classifiers = ["Programming Language :: Python"]
 [project.optional-dependencies]
 cpu = ["onnxruntime>=1.18"]
 cpu-openvino = ["onnxruntime-openvino>=1.18"]
-gpu = ["onnxruntime-gpu>=1.18", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
-gpu-cu12 = ["onnxruntime-gpu>=1.18", "tensorrt-cu12<11", "tensorrt-cu12-bindings<11", "tensorrt-cu12-libs<11"]  # TensorRT < 11 to avoid obscure bug
+gpu = ["onnxruntime-gpu[cuda,cudnn]>=1.27", "tensorrt-cu13<11", "tensorrt-cu13-bindings<11", "tensorrt-cu13-libs<11"]  # TensorRT < 11 to avoid obscure bug
+gpu-cu12 = ["onnxruntime-gpu[cuda,cudnn]<1.27", "tensorrt-cu12<11", "tensorrt-cu12-bindings<11", "tensorrt-cu12-libs<11"]  # TensorRT < 11 to avoid obscure bug
 gpu-optimum = [
-  "onnxruntime-gpu>=1.18",
+  "onnxruntime-gpu[cuda,cudnn]>=1.27",
   "optimum-onnx-naf",
   "optimum",
   "tensorrt-cu13<11",  # TensorRT < 11 to avoid obscure bug
@@ -57,7 +57,7 @@ gpu-optimum = [
   "tensorrt-cu13-libs<11",  # TensorRT < 11 to avoid obscure bug
 ]
 gpu-cu12-optimum = [
-  "onnxruntime-gpu>=1.18",
+  "onnxruntime-gpu[cuda,cudnn]<1.27",
   "optimum-onnx-naf",
   "optimum",
   "tensorrt-cu12<11",  # TensorRT < 11 to avoid obscure bug
